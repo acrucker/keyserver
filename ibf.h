@@ -39,6 +39,11 @@ int
 ibf_decode(struct inv_bloom_t *filter /* Filter to search */,
            uint64_t *element /* Updated with the decoded element */);
 
+/* Subtracts B from A in place. Returns 0 on success, non-zero on error. */
+int
+ibf_subtract(struct inv_bloom_t *filter_A,
+             struct inv_bloom_t *filter_B);
+
 /* Counts the number of elements in the bloom filter. */
 uint64_t
 ibf_count(struct inv_bloom_t *filter);
