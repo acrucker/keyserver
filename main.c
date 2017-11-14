@@ -6,13 +6,25 @@
 int 
 main(int argc, char **argv) {
     struct inv_bloom_t *filter;
-    assert(filter=ibf_allocate(3, 16, 64, FNV_1a_64_dual));
+    uint64_t element;
+    int ret;
+    int i;
+    assert(filter=ibf_allocate(2, 1024, 64, FNV_1a_64_dual));
 
-    ibf_insert(filter, 1);
-    ibf_insert(filter, 2);
-    ibf_insert(filter, 3);
-    
-    assert(ibf_count(filter) == 3);
+    for (i=0; i<400; i++)
+        ibf_insert(filter, i);
+
+    while((ret=ibf_decode(filter, &element))) {
+        if (ret > 0)
+            printf("Removed element %lu from filter.\n", element);
+        else
+            printf("Removed negative element %lu from filter.\n", element);
+    }
+
+    printf("Filter had %lu undecodeable elements.\n", ibf_count(filter));
+
+    ibf_free(filter);
+
     
     return 0;
 }

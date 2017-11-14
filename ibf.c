@@ -5,7 +5,7 @@
 
 struct inv_bloom_t {
     /* Arrays of bucket counts, xors, and xors of hashes. */
-    uint64_t *counts; 
+    int64_t  *counts; 
     uint64_t *id_sums; 
     uint64_t *hash_sums; 
 
@@ -68,24 +68,75 @@ ibf_free(struct inv_bloom_t *filter) {
     free(filter);
 }
 
-/* Inserts the given element into the bloom filter. Always succeeds if the 
- * filter is valid. */
+/* Helper function to handle insertions and deletions. */
 void
-ibf_insert(struct inv_bloom_t *filter /* Filter to insert into */,
-           uint64_t element /* Element to insert. */) {
+ibf_insdel(struct inv_bloom_t *filter,
+           uint64_t element,
+           int ins /* 1 for insert, -1 for delete. */) {
     uint64_t i;
     uint64_t key;
     uint64_t hash_val;
     assert(filter);
 
     for (i=0; i<filter->k; i++) {
-        key = (*filter->hash)(i, element) % filter->N;
-        hash_val = (*filter->hash)(i+filter->k, element);
+        key = (*filter->hash)(1+i, element) % filter->N;
+        hash_val = (*filter->hash)(0, element);
 
-        filter->counts[key]++;
+        filter->counts[key] += (ins>0)?1:-1;
         filter->id_sums[key] ^= element;
         filter->hash_sums[key] ^= hash_val;
     }
+}
+
+
+/* Inserts the given element into the bloom filter. Always succeeds if the 
+ * filter is valid. */
+void
+ibf_insert(struct inv_bloom_t *filter /* Filter to insert into */,
+           uint64_t element /* Element to insert. */) {
+    ibf_insdel(filter, element, 1);
+}
+
+/* Deletes the given element from the bloom filter. May result in negative
+ * counts. */
+void
+ibf_delete(struct inv_bloom_t *filter,
+           uint64_t element) {
+    ibf_insdel(filter, element, -1);
+}
+
+/* Decodes one element from filter, if possible, returning the result into
+ * the value pointed by element. Returns the number of elements removed. */
+int
+ibf_decode(struct inv_bloom_t *filter /* Filter to search */,
+           uint64_t *element /* Updated with the decoded element */) {
+    size_t i;
+    uint64_t val;
+    uint64_t hash_val;
+    int ins_del;
+    assert(filter);
+
+    for(i=0; i<filter->N; i++) {
+        /* Need to have abs(count) == 1 to be able to decode. */
+        if (abs(filter->counts[i]) != 1)
+            continue;
+
+        /* Check that both the hash and value match. */
+        val = filter->id_sums[i];
+        hash_val = (*filter->hash)(0, val);
+        if (hash_val != filter->hash_sums[i])
+            continue;
+
+        /* Update the filter to remove the value. */
+        ins_del = -filter->counts[i]; /* -1 for delete if count == 1
+                                       *  1 for insert if count == -1 */
+        ibf_insdel(filter, val, ins_del);
+
+        /* Return the value, and whether an insert or delete was performed. */
+        *element = val;
+        return -ins_del;
+    }
+    return 0;
 }
 
 /* Counts the number of elements in the bloom filter. */
