@@ -14,4 +14,8 @@ parse_from_dump(FILE *in, struct pgp_key_t *key);
 void
 pretty_print_key(struct pgp_key_t *key, char *prefix);
 
+/* Parses a raw key to isolate metadata. */
+int
+parse_key_metadata(struct pgp_key_t *key);
+
 #endif

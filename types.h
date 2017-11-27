@@ -5,6 +5,7 @@
 #include <stdlib.h>
 
 struct inv_bloom_t;
+struct keydb_t;
 typedef uint8_t fp160[20];
 
 struct pgp_key_t {

@@ -1,0 +1,95 @@
+#include "keydb.h"
+#include "key.h"
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <db.h>
+
+struct keydb_t {
+    DB *dbp;
+};
+
+struct keydb_t *
+open_key_db(const char *filename) {
+    struct keydb_t *ret;
+
+    ret = malloc(sizeof(struct keydb_t));
+    if (!ret)
+        goto error;
+
+    if (db_create(&ret->dbp, NULL, 0))
+        goto error;
+
+    if (ret->dbp->open(ret->dbp, NULL, filename, NULL, DB_HASH, DB_CREATE, 0666))
+        goto error;
+
+    return ret;
+
+error:
+    if (!ret)
+        return NULL;
+
+    free(ret);
+
+    return NULL;
+}
+
+int
+insert_key(struct keydb_t *db, struct pgp_key_t *pgp_key) {
+    DBT key, data;
+    int ret;
+
+    if (!db) return -1;
+    if (!db->dbp) return -1;
+    if (!pgp_key) return -1;
+
+    memset(&key, 0, sizeof(key));
+    memset(&data, 0, sizeof(data));
+    key.data = pgp_key->hash;
+    key.size = 20;
+    data.data = pgp_key->data;
+    data.size = pgp_key->len;
+    
+    ret = db->dbp->put(db->dbp, NULL, &key, &data, DB_NOOVERWRITE);
+
+    if (ret == DB_KEYEXIST)
+        return 0;
+    else if (ret)
+        return -1;
+
+    return 0;
+}
+
+int
+retrieve_key(struct keydb_t *db, struct pgp_key_t *pgp_key, fp160 keyid) {
+    DBT key, data;
+    int ret;
+
+    if (!db) return -1;
+    if (!db->dbp) return -1;
+    if (!pgp_key) return -1;
+
+    memset(&key, 0, sizeof(key));
+    memset(&data, 0, sizeof(data));
+
+    key.data = keyid;
+    key.size = 20;
+
+    ret = db->dbp->get(db->dbp, NULL, &key, &data, 0);
+
+    if (ret)
+        return -1;
+
+    pgp_key->data = data.data;
+    pgp_key->len = data.size;
+
+    if (parse_key_metadata(pgp_key))
+        return -1;
+
+    return 0;
+}
+
+int
+db_fill_ibf(struct keydb_t *db, struct inv_bloom_t *filter) {
+    return -1;
+}
