@@ -10,4 +10,8 @@
 int
 parse_from_dump(FILE *in, struct pgp_key_t *key);
 
+/* Pretty prints a key to standard out with an optional prefix. */
+void
+pretty_print_key(struct pgp_key_t *key, char *prefix);
+
 #endif

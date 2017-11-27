@@ -3,29 +3,23 @@
 #include <assert.h>
 #include <string.h>
 
-#define _BM(x) (((x)==64)?(uint64_t)-1:(1<<(x))-1)
+#include <openssl/sha.h>
 
 struct inv_bloom_t {
     /* Arrays of bucket counts, xors, and xors of hashes. */
     int64_t  *counts; 
-    uint64_t *id_sums; 
-    uint64_t *hash_sums; 
-
-    /* Function used for hashing. */
-    uint64_t (*hash)(uint64_t, uint64_t); 
+    fp160    *id_sums; 
+    fp160    *hash_sums; 
 
     int      k; /* Number of buckets to hash each element into. */
     size_t   N; /* Total number of buckets. */
-    int      l; /* Effective length of all strings (bits). */
 };
 
 /* Allocates and returns a pointer to an inverse bloom filter with the
  * requested parameters. Returns NULL in the case of failure. */
 struct inv_bloom_t *
 ibf_allocate(int    k /* Number of hashes per element */,
-             size_t N /* Number of buckets */,
-             int    l /* Effective key length (bits) */,
-             uint64_t (*hash)(uint64_t, uint64_t) /* Hash function */) {
+             size_t N /* Number of buckets */) {
     struct inv_bloom_t *filter;
 
     filter = malloc(sizeof(struct inv_bloom_t));
@@ -37,16 +31,14 @@ ibf_allocate(int    k /* Number of hashes per element */,
     filter->counts = calloc(N, sizeof(uint64_t)); 
     if (!filter->counts) goto fail;
 
-    filter->id_sums = calloc(N, sizeof(uint64_t));
+    filter->id_sums = calloc(N, sizeof(fp160));
     if (!filter->id_sums) goto fail;
 
-    filter->hash_sums = calloc(N, sizeof(uint64_t));
+    filter->hash_sums = calloc(N, sizeof(fp160));
     if (!filter->hash_sums) goto fail;
 
-    filter->hash = hash;
     filter->k = k;
     filter->N = N;
-    filter->l = l;
     
     return filter;
 
@@ -70,34 +62,63 @@ ibf_free(struct inv_bloom_t *filter) {
     free(filter);
 }
 
-/* Helper function to handle insertions and deletions. */
-void
-ibf_insdel(struct inv_bloom_t *filter,
-           uint64_t element,
-           int ins /* 1 for insert, -1 for delete. */) {
-    uint64_t i;
-    uint64_t key;
-    uint64_t hash_val;
-    assert(filter);
+uint64_t
+ibf_sha1_64_keyed(fp160 data, uint64_t index) {
+    uint8_t buf[28];
+    fp160 result;
+    uint64_t ret;
+    int i;
 
-    element &= _BM(filter->l);
+    for (i=0; i<8; i++) {
+        buf[20+i] = (index>>(56-8*i))&0xFF;
+    }
+    
+    memcpy(buf, data, 20);
+    SHA1(buf, 28, result);;
 
-    for (i=0; i<filter->k; i++) {
-        key = (*filter->hash)(1+i, element) % filter->N;
-        hash_val = (*filter->hash)(0, element) & _BM(filter->l);
+    ret = 0;
+    for (i=0; i<8; i++) {
+        ret <<= 8;
+        ret |= result[8-i];
+    }
+    return ret;
+}
 
-        filter->counts[key] += (ins>0)?1:-1;
-        filter->id_sums[key] ^= element;
-        filter->hash_sums[key] ^= hash_val;
+/* Updates dst ^= src. */
+void 
+ibf_fp160_xor(fp160 dst, fp160 src) {
+    int i;
+
+    for (i=0; i<20; i++) {
+        dst[i] ^= src[i];
     }
 }
 
+/* Helper function to handle insertions and deletions. */
+void
+ibf_insdel(struct inv_bloom_t *filter,
+           fp160 element,
+           int ins /* 1 for insert, -1 for delete. */) {
+    uint64_t i;
+    uint64_t key;
+    fp160 hash_val;
+    assert(filter);
+
+    SHA1(element, 20, hash_val);
+    for (i=0; i<filter->k; i++) {
+        key = ibf_sha1_64_keyed(element, i) % filter->N;
+
+        filter->counts[key] += (ins>0)?1:-1;
+        ibf_fp160_xor(filter->id_sums[key], element);
+        ibf_fp160_xor(filter->hash_sums[key], hash_val);
+    }
+}
 
 /* Inserts the given element into the bloom filter. Always succeeds if the 
  * filter is valid. */
 void
 ibf_insert(struct inv_bloom_t *filter /* Filter to insert into */,
-           uint64_t element /* Element to insert. */) {
+           fp160 element /* Element to insert. */) {
     ibf_insdel(filter, element, 1);
 }
 
@@ -105,18 +126,30 @@ ibf_insert(struct inv_bloom_t *filter /* Filter to insert into */,
  * counts. */
 void
 ibf_delete(struct inv_bloom_t *filter,
-           uint64_t element) {
+           fp160 element) {
     ibf_insdel(filter, element, -1);
+}
+
+/* Returns non-zero iff a == b. */
+int
+ibf_fp160_eq(fp160 a, fp160 b) {
+    int i;
+    int diff;
+
+    diff = 0;
+    for (i=0; i<20; i++)
+        diff |= a[i]^b[i];
+
+    return diff;
 }
 
 /* Decodes one element from filter, if possible, returning the result into
  * the value pointed by element. Returns the number of elements removed. */
 int
 ibf_decode(struct inv_bloom_t *filter /* Filter to search */,
-           uint64_t *element /* Updated with the decoded element */) {
+           fp160 element /* Updated with the decoded element */) {
     size_t i;
-    uint64_t val;
-    uint64_t hash_val;
+    fp160 hash_val;
     int ins_del;
     assert(filter);
 
@@ -126,18 +159,18 @@ ibf_decode(struct inv_bloom_t *filter /* Filter to search */,
             continue;
 
         /* Check that both the hash and value match to the defined precision. */
-        val = filter->id_sums[i];
-        hash_val = (*filter->hash)(0, val) & _BM(filter->l);
-        if (hash_val != filter->hash_sums[i])
+        SHA1(filter->id_sums[i], 20, hash_val);
+        if (!ibf_fp160_eq(filter->id_sums[i], hash_val))
             continue;
+
+        memcpy(&element[0], &filter->id_sums[i], 20);
 
         /* Update the filter to remove the value. */
         ins_del = -filter->counts[i]; /* -1 for delete if count == 1
                                        *  1 for insert if count == -1 */
-        ibf_insdel(filter, val, ins_del);
+        ibf_insdel(filter, element, ins_del);
 
         /* Return the value, and whether an insert or delete was performed. */
-        *element = val;
         return -ins_del;
     }
     return 0;
@@ -152,13 +185,11 @@ ibf_subtract(struct inv_bloom_t *filter_A,
     if (!filter_B)                        return -1;
     if (filter_A->k != filter_B->k)       return -1;
     if (filter_A->N != filter_B->N)       return -1;
-    if (filter_A->l != filter_B->l)       return -1;
-    if (filter_A->hash != filter_B->hash) return -1;
 
     for (i=0; i<filter_A->N; i++) {
         filter_A->counts[i] -= filter_B->counts[i];
-        filter_A->id_sums[i] ^= filter_B->id_sums[i];
-        filter_A->hash_sums[i] ^= filter_B->hash_sums[i];
+        ibf_fp160_xor(filter_A->id_sums[i], filter_B->id_sums[i]);
+        ibf_fp160_xor(filter_A->hash_sums[i], filter_B->hash_sums[i]);
     }
 
     return 0;

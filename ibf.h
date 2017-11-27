@@ -3,16 +3,13 @@
 
 #include <stdint.h>
 #include <stddef.h>
-
-struct inv_bloom_t;
+#include "types.h"
 
 /* Allocates and returns a pointer to an inverse bloom filter with the
  * requested parameters. Returns NULL in the case of failure. */
 struct inv_bloom_t *
 ibf_allocate(int    k /* Number of hashes per element */,
-             size_t N /* Number of buckets */,
-             int    l /* Effective key length (bits) */,
-             uint64_t (*hash)(uint64_t, uint64_t) /* Hash function */);
+             size_t N /* Number of buckets */);
 
 /* Frees all memory allocated by the filter. */
 void
@@ -22,13 +19,13 @@ ibf_free(struct inv_bloom_t *filter);
  * filter is valid. */
 void
 ibf_insert(struct inv_bloom_t *filter /* Filter to insert into */,
-           uint64_t element /* Element to insert. */);
+           fp160 element /* Element to insert. */);
 
 /* Deletes the given element from the bloom filter. May result in negative
  * counts. */
 void
 ibf_delete(struct inv_bloom_t *filter,
-           uint64_t element);
+           fp160 element);
 
 /* Decodes one element from filter, if possible, returning the result into
  * the value pointed by element. Returns 1 if a positive element was removed;
@@ -37,7 +34,7 @@ ibf_delete(struct inv_bloom_t *filter,
  * being empty. */
 int
 ibf_decode(struct inv_bloom_t *filter /* Filter to search */,
-           uint64_t *element /* Updated with the decoded element */);
+           fp160 element /* Updated with the decoded element */);
 
 /* Subtracts B from A in place. Returns 0 on success, non-zero on error. */
 int

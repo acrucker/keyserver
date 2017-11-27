@@ -2,36 +2,44 @@
 #include <assert.h>
 #include "hash.h"
 #include "ibf.h"
+#include "types.h"
+#include "key.h"
 
-int 
-main(int argc, char **argv) {
-    struct inv_bloom_t *filter_A;
-    struct inv_bloom_t *filter_B;
-    uint64_t element;
-    int ret;
+int main(int argc, char **argv) {
+    FILE *in;
+    struct pgp_key_t key;
+    uint64_t total;
+    int read;
     int i;
-    assert(filter_A=ibf_allocate(2, 1024, 64, FNV_1a_64_dual));
-    assert(filter_B=ibf_allocate(2, 1024, 64, FNV_1a_64_dual));
 
-    for (i=5; i<400000; i++)
-        ibf_insert(filter_A, i);
-    for (i=0; i<399990; i++)
-        ibf_insert(filter_B, i);
+    struct inv_bloom_t *filter;
+    assert(filter=ibf_allocate(2, 1024));
 
-    assert(!ibf_subtract(filter_A, filter_B));
+    read = total = 0;
 
-    while((ret=ibf_decode(filter_A, &element))) {
-        if (ret > 0)
-            printf("Removed element %lu from filter.\n", element);
-        else
-            printf("Removed negative element %lu from filter.\n", element);
+    for (i=1; i<argc; i++) {
+        in = fopen(argv[1], "rb");
+        if (!in) {
+            fprintf(stderr, "Could not open dump file %s\n", argv[1]);
+            exit(1);
+        }
+        
+        while (!parse_from_dump(in, &key)) {
+            /*pretty_print_key(&key, "");*/
+            total += key.len;
+            ibf_insert(filter, key.hash);
+            free(key.data);
+            read++;
+        }
+
+        fclose(in);
     }
+    printf("Read %d keys (total %6.2f MiB).\n", read, total/1024.0/1024.0);
 
-    printf("Filter had %lu undecodeable elements.\n", ibf_count(filter_A));
+    printf("IBF contains %lu keys.\n", ibf_count(filter));
 
-    ibf_free(filter_A);
-    ibf_free(filter_B);
+    ibf_free(filter);
 
-    
     return 0;
 }
+
