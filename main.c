@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <assert.h>
 #include "hash.h"
@@ -13,12 +15,12 @@ int main(int argc, char **argv) {
     int i;
 
     struct inv_bloom_t *filter;
-    assert(filter=ibf_allocate(2, 1024));
+    assert(filter=ibf_allocate(2, 80));
 
     read = total = 0;
 
     for (i=1; i<argc; i++) {
-        in = fopen(argv[1], "rb");
+        in = fopen(argv[i], "rb");
         if (!in) {
             fprintf(stderr, "Could not open dump file %s\n", argv[1]);
             exit(1);
@@ -37,6 +39,8 @@ int main(int argc, char **argv) {
     printf("Read %d keys (total %6.2f MiB).\n", read, total/1024.0/1024.0);
 
     printf("IBF contains %lu keys.\n", ibf_count(filter));
+
+    ibf_write(stdout, filter);
 
     ibf_free(filter);
 

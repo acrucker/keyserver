@@ -7,7 +7,7 @@
 
 struct inv_bloom_t {
     /* Arrays of bucket counts, xors, and xors of hashes. */
-    int64_t  *counts; 
+    int32_t  *counts; 
     fp160    *id_sums; 
     fp160    *hash_sums; 
 
@@ -28,7 +28,7 @@ ibf_allocate(int    k /* Number of hashes per element */,
     /* NULL out pointers to allow easy error handling. */
     memset(filter, 0, sizeof(struct inv_bloom_t));
 
-    filter->counts = calloc(N, sizeof(uint64_t)); 
+    filter->counts = calloc(N, sizeof(int32_t)); 
     if (!filter->counts) goto fail;
 
     filter->id_sums = calloc(N, sizeof(fp160));
@@ -48,6 +48,25 @@ fail:
     return NULL;
 }
 
+struct inv_bloom_t *
+ibf_copy(struct inv_bloom_t *filter) {
+    struct inv_bloom_t *copy;
+
+    if (!filter) return NULL;
+    copy = ibf_allocate(filter->k, filter->N);
+    if (!copy)
+        return NULL;
+    
+    copy->k = filter->k;
+    copy->N = filter->N;
+
+    memcpy(copy->counts, filter->counts, copy->N*sizeof(int32_t));
+    memcpy(copy->id_sums, filter->id_sums, copy->N*sizeof(fp160));
+    memcpy(copy->hash_sums, filter->hash_sums, copy->N*sizeof(fp160));
+
+    return copy;
+}
+    
 /* Frees all memory allocated by the filter. */
 void
 ibf_free(struct inv_bloom_t *filter) {
@@ -215,7 +234,23 @@ ibf_count(struct inv_bloom_t *filter) {
     return count;
 }
 
+/* Writes out filter to an ASCII file. Returns 0 on success. */
+int
+ibf_write(FILE *out, struct inv_bloom_t *filter) {
+    int i, j;
 
-
-
+    assert(out);
+    assert(filter);
+    fprintf(out, "1 %d %lu\n", filter->k, filter->N);
+    for (i=0; i<filter->N; i++) {
+        fprintf(out, "%d ", filter->counts[i]);
+        for(j=0; j<20; j++)
+            fprintf(out, "%02X", (filter->id_sums[i])[j]);
+        fprintf(out, " ");
+        for(j=0; j<20; j++)
+            fprintf(out, "%02X", (filter->hash_sums[i])[j]);
+        fprintf(out, "\n");
+    }
+    return 0;
+}
 

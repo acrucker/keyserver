@@ -1,6 +1,7 @@
 #ifndef _IBF_H
 #define _IBF_H
 
+#include <stdio.h>
 #include <stdint.h>
 #include <stddef.h>
 #include "types.h"
@@ -10,6 +11,11 @@
 struct inv_bloom_t *
 ibf_allocate(int    k /* Number of hashes per element */,
              size_t N /* Number of buckets */);
+
+/* Allocates and returns a pointer to a bloom filter that is a copy of filter.
+ * returns NULL in the case of failure. */
+struct inv_bloom_t *
+ibf_copy(struct inv_bloom_t *filter);
 
 /* Frees all memory allocated by the filter. */
 void
@@ -44,5 +50,9 @@ ibf_subtract(struct inv_bloom_t *filter_A,
 /* Counts the number of elements in the bloom filter. */
 uint64_t
 ibf_count(struct inv_bloom_t *filter);
+
+/* Writes out filter to an ASCII file. Returns 0 on success. */
+int
+ibf_write(FILE *out, struct inv_bloom_t *filter);
 
 #endif
