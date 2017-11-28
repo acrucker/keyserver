@@ -10,8 +10,9 @@ struct keydb_t {
 };
 
 struct keydb_t *
-open_key_db(const char *filename) {
+open_key_db(const char *filename, char create) {
     struct keydb_t *ret;
+    int flags;
 
     ret = malloc(sizeof(struct keydb_t));
     if (!ret)
@@ -20,7 +21,12 @@ open_key_db(const char *filename) {
     if (db_create(&ret->dbp, NULL, 0))
         goto error;
 
-    if (ret->dbp->open(ret->dbp, NULL, filename, NULL, DB_HASH, DB_CREATE, 0666))
+    if (create)
+        flags = DB_CREATE;
+    else
+        flags = 0;
+
+    if (ret->dbp->open(ret->dbp, NULL, filename, NULL, DB_HASH, flags, 0666))
         goto error;
 
     return ret;
@@ -32,6 +38,16 @@ error:
     free(ret);
 
     return NULL;
+}
+
+int
+close_key_db(struct keydb_t *db) {
+    int ret;
+    ret = 0;
+    if (db->dbp->close(db->dbp, 0))
+        ret = -1;
+    free(db);
+    return ret;
 }
 
 int

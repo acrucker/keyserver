@@ -5,7 +5,10 @@
 #include "ibf.h"
 
 struct keydb_t *
-open_key_db(const char *filename);
+open_key_db(const char *filename, char create);
+
+int
+close_key_db(struct keydb_t *db);
 
 int
 insert_key(struct keydb_t *db, struct pgp_key_t *key);
