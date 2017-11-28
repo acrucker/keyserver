@@ -19,7 +19,9 @@ int main(int argc, char **argv) {
     int i;
 
     struct inv_bloom_t *filter;
+    struct inv_bloom_t *filter_db;
     assert(filter=ibf_allocate(2, 80));
+    assert(filter_db=ibf_allocate(2, 80));
 
     read = total = 0;
     verbose = create = ingest = 0;
@@ -72,6 +74,10 @@ int main(int argc, char **argv) {
         }
         printf("Read %d keys (total %6.2f MiB).\n", read, total/1024.0/1024.0);
         printf("IBF contains %lu keys.\n", ibf_count(filter));
+        db_fill_ibf(db, filter_db);
+        printf("IBF from DB contains %lu keys.\n", ibf_count(filter_db));
+        ibf_subtract(filter_db, filter);
+        printf("IBF difference contains %lu keys.\n", ibf_count(filter_db));
     }
 
     if (verbose)

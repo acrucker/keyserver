@@ -1,5 +1,6 @@
 #include "keydb.h"
 #include "key.h"
+#include "ibf.h"
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
@@ -107,5 +108,29 @@ retrieve_key(struct keydb_t *db, struct pgp_key_t *pgp_key, fp160 keyid) {
 
 int
 db_fill_ibf(struct keydb_t *db, struct inv_bloom_t *filter) {
-    return -1;
+    DBC *curs;
+    DB *dbp;
+    DBT key, data;
+    struct pgp_key_t pgp_key;
+    int ret;
+
+    dbp = db->dbp;
+    ret = dbp->cursor(dbp, NULL, &curs, 0);
+    if (ret)
+        return -1;
+
+    memset(&key, 0, sizeof(key));
+    memset(&data, 0, sizeof(data));
+
+    while (!curs->c_get(curs, &key, &data, DB_NEXT)) {
+        pgp_key.data = data.data;
+        pgp_key.len = data.size;
+
+        if (parse_key_metadata(&pgp_key))
+            continue;
+
+        ibf_insert(filter, pgp_key.hash);
+    };
+
+    return 0;
 }
