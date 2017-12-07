@@ -6,17 +6,21 @@
 #include "types.h"
 #include "key.h"
 #include "keydb.h"
+#include "serv.h"
 
 int main(int argc, char **argv) {
     FILE *in;
     char *db_name;
+    char *serv_root;
     char verbose, create, ingest;
     struct pgp_key_t key;
     struct keydb_t *db;
+    struct serv_state_t *serv;
     uint64_t total;
     int read;
     int opt;
     int i;
+    int port;
 
     struct inv_bloom_t *filter;
     struct inv_bloom_t *filter_db;
@@ -25,26 +29,20 @@ int main(int argc, char **argv) {
 
     read = total = 0;
     verbose = create = ingest = 0;
-    db_name = NULL;
+    port = 8080;
+    db_name = "test.db";
+    serv_root = "static";
 
-    while ((opt = getopt(argc, argv, "cp:d:iv")) != -1) {
+    while ((opt = getopt(argc, argv, "cp:d:ivr:")) != -1) {
         switch (opt) {
             default:
-            case '?':
-                return -1;
-                break;
-            case 'd':
-                db_name = optarg;
-                break;
-            case 'c':
-                create = 1;
-                break;
-            case 'i':
-                ingest = 1;
-                break;
-            case 'v':
-                verbose = 1;
-                break;
+            case '?': return -1;           break;
+            case 'd': db_name = optarg;    break;
+            case 'p': port = atoi(optarg); break;
+            case 'c': create = 1;          break;
+            case 'i': ingest = 1;          break;
+            case 'v': verbose = 1;         break;
+            case 'r': serv_root = optarg;; break;
         }
     }
 
@@ -78,7 +76,13 @@ int main(int argc, char **argv) {
         printf("IBF from DB contains %lu keys.\n", ibf_count(filter_db));
         ibf_subtract(filter_db, filter);
         printf("IBF difference contains %lu keys.\n", ibf_count(filter_db));
+    } else {
+        printf("Starting in server mode on port %d.\n", port);
+        assert(serv=start_server(port, serv_root));
+        getc(stdin);
+        stop_server(serv);
     }
+
 
     if (verbose)
         ibf_write(stdout, filter);
@@ -86,6 +90,7 @@ int main(int argc, char **argv) {
     if (close_key_db(db))
         return -1;
     ibf_free(filter);
+    ibf_free(filter_db);
 
     return 0;
 }
