@@ -63,7 +63,7 @@ int main(int argc, char **argv) {
         for (i=0; i<results; i++)
             pretty_print_key(&res_keys[i], "  ");
         if (results == 1) {
-            tmp = ascii_armor_key(&res_keys[0]);
+            tmp = ascii_armor_keys(&res_keys[0], 1);
             printf("\n%s\n", tmp);
             if (ascii_parse_key(tmp, &key)) {
                 printf("Failed to parse generated key.\n");
@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
                 printf("Parsed generated key:\n");
                 parse_key_metadata(&key);
                 pretty_print_key(&key, "");
-                printf("%s\n", ascii_armor_key(&key));
+                printf("%s\n", ascii_armor_keys(&key, 1));
             }
         }
     } else if (ingest) {

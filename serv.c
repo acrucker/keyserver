@@ -8,6 +8,8 @@
 #include <assert.h>
 
 #include "serv.h"
+#include "key.h"
+#include "util.h"
 
 #define PATH_LEN 256
 #define BUF_SIZE (1024*1024)
@@ -19,7 +21,7 @@ struct serv_state_t {
 
 int reply_response_status(struct _u_response *response,
                           int status,
-                          char *desc) {
+                          const char *desc) {
     char *expl;
     char buf[BUF_SIZE];
     switch(status) {
@@ -162,16 +164,18 @@ error:
 int callback_hkp_lookup(const struct _u_request *request,
                         struct _u_response *response,
                         void *db_) {
-    char mr, exact, fingerprint, get, index, vindex;
+    char mr, exact, fingerprint, get, download, index, vindex;
     const char *op, *search;
     char *options, *opt_tok;
     struct keydb_t *db = db_;
     int num_results, after;
     struct pgp_key_t results[MAX_RESULTS];
     char *resp;
+    int i;
+    fp160 hash;
 
     after = 0;
-    mr = exact = fingerprint = get = index = vindex = 0;
+    mr = exact = fingerprint = get = download = index = vindex = 0;
     printf("Received HKP request.\n");
 
     /* These are required options. */
@@ -181,9 +185,10 @@ int callback_hkp_lookup(const struct _u_request *request,
         return reply_response_status(response, 400, "Specify search query");
 
     op = u_map_get(request->map_url, "op");
-    if      (!strcmp(op,"get"))    get    = 1;
-    else if (!strcmp(op,"index"))  index  = 1;
-    else if (!strcmp(op,"vindex")) vindex = 1;
+    if      (!strcmp(op,"get"))      get    = 1;
+    else if (!strcmp(op,"download")) download = 1;
+    else if (!strcmp(op,"index"))    index  = 1;
+    else if (!strcmp(op,"vindex"))   vindex = 1;
     else return reply_response_status(response, 400, "Invalid operation");
 
     search = u_map_get(request->map_url, "search");
@@ -212,26 +217,43 @@ int callback_hkp_lookup(const struct _u_request *request,
 
     printf("Parsed HKP request successfully:\n");
     printf("\top=%s\n\tquery=%s\n\tfingerprint=%d\n\tmr=%d\n\texact=%d\n",
-            get ? "get" : index ? "index" : vindex ? "vindex" : "error",
+            get ? "get" : 
+            download ? "download" : 
+            index ? "index" : 
+            vindex ? "vindex" : "error",
             search, fingerprint, mr, exact);
+    if (index || get)
+        num_results = query_key_db(db, search, MAX_RESULTS, results, exact, after);
 
     if (index) {
-        num_results = query_key_db(db, search, MAX_RESULTS, results, exact, after);
         resp = pretty_print_index_html(results, num_results, search, exact, after);
-        if (resp) {
-            response->binary_body = resp;
-            response->binary_body_length = strlen(resp);
-            response->status = 200;
-            return U_CALLBACK_COMPLETE;
-        } else {
-            return reply_response_status(response, 502, "malloc");
-        }
     } else if (vindex) {
         return reply_response_status(response, 501, "vindex not supported");
+    } else if (download) {
+        parse_fp160(search, hash);
+        if (retrieve_key(db, &results[0], hash))
+            return reply_response_status(response, 404, search);
+        resp = ascii_armor_keys(&results[0], 1);
+        num_results = 1;
     } else if (get) {
-        return reply_response_status(response, 501, "get not supported");
+        if (num_results == 0)
+            return reply_response_status(response, 404, search);
+        resp = ascii_armor_keys(results, num_results);
     }
-    assert(0);
+
+    for (i=0; i<num_results; i++) {
+        free(results[i].data);
+        free(results[i].user_id);
+    }
+
+    if (resp) {
+        response->binary_body = resp;
+        response->binary_body_length = strlen(resp);
+        response->status = 200;
+        return U_CALLBACK_COMPLETE;
+    } else {
+        return reply_response_status(response, 502, "malloc");
+    }
 }
 
 void free_static_stream(void *fd) {
@@ -292,7 +314,6 @@ start_server(short port, char *root, struct keydb_t *db) {
     /* Add an endpoint for static files with lowest priority.*/
     ulfius_add_endpoint_by_val(&serv->inst, "GET", NULL, "/*", 100,
             &callback_static, root);
-    /* Add the key download endpoint. */
     /* Add the key upload endpoint. */
     /* Add the difference estimator endpoint. */
     /* Add the bloom filter endpoint. */

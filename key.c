@@ -324,48 +324,66 @@ long crc_octets(unsigned char *octets, size_t len)
 }
 
 char *
-ascii_armor_key(struct pgp_key_t *key) {
+ascii_armor_keys(struct pgp_key_t *key, int count) {
     char *buf;
+    uint8_t *data;
     int line_written, i;
     int printed;
+    size_t total_len;
     uint32_t tmp;
     char enc[5];
     
-    buf = malloc(key->len*2+1024);
-    if (!buf) return NULL;
+    total_len = 0;
+    for (i=0; i<count; i++)
+        total_len += key[i].len;
+    data = malloc(total_len);
+    buf = malloc(total_len*2+1024);
+    if (!buf) goto error;
+    if (!data) goto error;
+    total_len = 0;
+    for (i=0; i<count; i++) {
+        memcpy(data+total_len, key[i].data, key[i].len);
+        total_len += key[i].len;
+    }
 
     line_written = 0;
     enc[4] = 0;
     printed = 0;
 
     printed += sprintf(buf+printed, START_ASCII "\n\n");
-    for (i=0; i<key->len; i+=3) {
+    for (i=0; i<total_len; i+=3) {
         if (line_written == 64) {
             line_written = 0;
             printed += sprintf(buf+printed, "\n");
         }
-        if (i+2 < key->len)
-            tmp = (key->data[i]<<16) | (key->data[i+1]<<8) | (key->data[i+2]);
-        else if (i+2 == key->len)
-            tmp = (key->data[i]<<16) | (key->data[i+1]<<8);
-        else if (i+1 == key->len)
-            tmp = (key->data[i]<<16);
+        if (i+2 < total_len)
+            tmp = (data[i]<<16) | (data[i+1]<<8) | (data[i+2]);
+        else if (i+2 == total_len)
+            tmp = (data[i]<<16) | (data[i+1]<<8);
+        else if (i+1 == total_len)
+            tmp = (data[i]<<16);
 
         ascii_armor_24b(tmp, enc);
 
-        if (i+2 == key->len)
+        if (i+2 == total_len)
             enc[3] = '=';
-        else if (i+1 == key->len)
+        else if (i+1 == total_len)
             enc[2] = enc[3] = '=';
 
         printed += sprintf(buf+printed, "%s", enc);
         line_written += 4;
     }
-    tmp = crc_octets(key->data, key->len);
+    tmp = crc_octets(data, total_len);
     ascii_armor_24b(tmp, enc);
     printed += sprintf(buf+printed, "\n=%s", enc);
     printed += sprintf(buf+printed, "\n" END_ASCII);
     return buf;
+error:
+    if (buf)
+        free(buf);
+    if (data)
+        free(data);
+    return NULL;
 }
 
 int
