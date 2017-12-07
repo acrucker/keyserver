@@ -28,9 +28,18 @@ strata_allocate(int    k /* Number of hashes per element */,
     for (i=0; i<c; i++)
         estimator->blooms[i] = ibf_allocate(k, N);
 
+    return estimator;
+
 error:
     strata_free(estimator);
     return NULL;
+}
+
+int
+strata_match(struct strata_estimator_t *estimator, int k, size_t N, int c) {
+    return estimator->k == k
+        && estimator->N == N
+        && estimator->c == c;
 }
 
 void
@@ -43,6 +52,14 @@ strata_free(struct strata_estimator_t *estimator) {
             ibf_free(estimator->blooms[i]);
     free(estimator->blooms);
     free(estimator);
+}
+
+void
+strata_counts(struct strata_estimator_t *estimator) {
+    int i;
+    for (i=0; i<estimator->c; i++)
+        printf("%2d: %8lu %8lu\n", i, ibf_count(estimator->blooms[i]),
+                                      ibf_count(estimator->blooms[i])*(1<<(i+1)));
 }
 
 void

@@ -1,9 +1,12 @@
 #include <stdio.h>
 #include <assert.h>
 #include <unistd.h>
+#include <stdlib.h>
+#include <time.h>
 #include "hash.h"
 #include "ibf.h"
 #include "types.h"
+#include "setdiff.h"
 #include "key.h"
 #include "keydb.h"
 #include "serv.h"
@@ -24,11 +27,16 @@ int main(int argc, char **argv) {
     int i;
     int port;
     int acc;
+    float excl_pct;
 
     struct pgp_key_t res_keys[16];
     int results;
 
     struct inv_bloom_t *filters[16];
+    struct strata_estimator_t *strata[2];
+
+    assert(strata[0]=strata_allocate(2, 10, 64));
+    strata[1] = NULL;
 
     read = total = 0;
     verbose = create = ingest = 0;
@@ -36,18 +44,20 @@ int main(int argc, char **argv) {
     db_name = "test.db";
     query = NULL;
     serv_root = "static";
+    excl_pct = 0.0;
 
-    while ((opt = getopt(argc, argv, "cp:d:ivr:s:")) != -1) {
+    while ((opt = getopt(argc, argv, "cp:d:ivr:s:e:")) != -1) {
         switch (opt) {
             default:
-            case '?': return -1;           break;
-            case 'd': db_name = optarg;    break;
-            case 'p': port = atoi(optarg); break;
-            case 'c': create = 1;          break;
-            case 'i': ingest = 1;          break;
-            case 'v': verbose = 1;         break;
-            case 'r': serv_root = optarg;  break;
-            case 's': query = optarg;      break;
+            case '?': return -1;               break;
+            case 'd': db_name = optarg;        break;
+            case 'p': port = atoi(optarg);     break;
+            case 'c': create = 1;              break;
+            case 'i': ingest = 1;              break;
+            case 'v': verbose = 1;             break;
+            case 'r': serv_root = optarg;      break;
+            case 's': query = optarg;          break;
+            case 'e': excl_pct = atof(optarg); break;
         }
     }
 
@@ -73,6 +83,8 @@ int main(int argc, char **argv) {
             }
         }
     } else if (ingest) {
+        printf("Randomly excluding %8.4f%% of keys.\n", excl_pct);
+        srand48(time(NULL));
         for (i=optind; i<argc; i++) {
             in = fopen(argv[i], "rb");
             if (!in) {
@@ -85,25 +97,32 @@ int main(int argc, char **argv) {
                     continue;
                 if(insert_key(db, &key))
                     return -1;
+                if (100*drand48() < excl_pct)
+                    continue;
                 total += key.len;
                 free(key.data);
                 free(key.user_id);
                 read++;
             }
+            if (read %10000 == 0)
+                printf("Ingesting...%d\n", read);
 
             fclose(in);
         }
         printf("Read %d keys (total %6.2f MiB).\n", read, total/1024.0/1024.0);
     } else {
-        printf("Starting in server mode on port %d.\n", port);
         acc = 10;
-        for (i=0; i<5; i++) {
+        for (i=0; i<7; i++) {
             assert(filters[i]=ibf_allocate(3, acc));
             assert(!db_fill_ibf(db, filters[i]));
             acc *= 2;
         }
         filters[i] = 0;
-        assert(serv=start_server(port, serv_root, db, filters));
+        printf("Filling strata from database.\n");
+        assert(!db_fill_strata(db, strata[0]));
+        /*strata_counts(strata);*/
+        printf("Starting in server mode on port %d.\n", port);
+        assert(serv=start_server(port, serv_root, db, filters, strata));
         getc(stdin);
         stop_server(serv);
     }

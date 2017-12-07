@@ -8,7 +8,8 @@
 struct serv_state_t;
 
 struct serv_state_t *
-start_server(short port, char *root, struct keydb_t *db, struct inv_bloom_t **ibfs);
+start_server(short port, char *root, struct keydb_t *db, 
+        struct inv_bloom_t **ibfs, struct strata_estimator_t **strata);
 
 void
 stop_server(struct serv_state_t *serv);

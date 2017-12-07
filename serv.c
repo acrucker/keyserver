@@ -299,6 +299,55 @@ int callback_bloom(const struct _u_request *request,
     }
 }
 
+int callback_strata(const struct _u_request *request,
+                    struct _u_response *response,
+                    void *strata_) {
+    char *resp;
+    int size, hcnt, depth;
+    struct strata_estimator_t **strata = strata_;
+    int i;
+
+    printf("Received strata request.\n");
+
+    /* These are required options. */
+    if (!u_map_has_key(request->map_url, "size"))
+        return reply_response_status(response, 400, "specify size");
+    else
+        size = atoi(u_map_get(request->map_url, "size"));
+
+    if (!u_map_has_key(request->map_url, "hcnt"))
+        return reply_response_status(response, 400, "specify number of hashes");
+    else
+        hcnt = atoi(u_map_get(request->map_url, "hcnt"));
+
+    if (!u_map_has_key(request->map_url, "depth"))
+        return reply_response_status(response, 400, "specify number of levels");
+    else
+        depth = atoi(u_map_get(request->map_url, "depth"));
+
+    printf("Parsed strata request successfully:\n");
+    printf("\tsize=%d\n", size);
+    printf("\thcnt=%d\n", hcnt);
+    printf("\tdepth=%d\n", depth);
+
+    resp = NULL;
+    for (i=0; strata[i]; i++) {
+        if(strata_match(strata[i], hcnt, size, depth)) {
+            resp = strata_write(strata[i]);
+            break;
+        }
+    }
+
+    if (resp) {
+        response->binary_body = resp;
+        response->binary_body_length = strlen(resp);
+        response->status = 200;
+        return U_CALLBACK_COMPLETE;
+    } else {
+        return reply_response_status(response, 404, "size/hash/depth count not found");
+    }
+}
+
 void free_static_stream(void *fd) {
     while (close(*(int*)fd) && errno == EINTR);
 }
@@ -339,7 +388,8 @@ int callback_static(const struct _u_request *request,
 }
 
 struct serv_state_t *
-start_server(short port, char *root, struct keydb_t *db, struct inv_bloom_t **ibfs) {
+start_server(short port, char *root, struct keydb_t *db, struct inv_bloom_t **ibfs,
+        struct strata_estimator_t **strata) {
     struct serv_state_t *serv;
 
     if (!(serv=malloc(sizeof(struct serv_state_t))))
@@ -359,6 +409,8 @@ start_server(short port, char *root, struct keydb_t *db, struct inv_bloom_t **ib
             &callback_static, root);
     /* Add the key upload endpoint. */
     /* Add the difference estimator endpoint. */
+    ulfius_add_endpoint_by_val(&serv->inst, "GET", NULL, "/strata/:depth/:hcnt/:size", 0,
+            &callback_strata, strata);
     /* Add the bloom filter endpoint. */
     ulfius_add_endpoint_by_val(&serv->inst, "GET", NULL, "/ibf/:hcnt/:size", 0,
             &callback_bloom, ibfs);

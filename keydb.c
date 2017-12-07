@@ -1,6 +1,7 @@
 #include "keydb.h"
 #include "key.h"
 #include "ibf.h"
+#include "setdiff.h"
 #include "util.h"
 #include <stdlib.h>
 #include <string.h>
@@ -274,6 +275,36 @@ db_fill_ibf(struct keydb_t *db, struct inv_bloom_t *filter) {
             continue;
 
         ibf_insert(filter, pgp_key.hash);
+        free(pgp_key.user_id);
+    };
+
+    return 0;
+}
+
+int
+db_fill_strata(struct keydb_t *db, struct strata_estimator_t *estimator) {
+    DBC *curs;
+    DB *dbp;
+    DBT key, data;
+    struct pgp_key_t pgp_key;
+    int ret;
+
+    dbp = db->dbp;
+    ret = dbp->cursor(dbp, NULL, &curs, 0);
+    if (ret)
+        return -1;
+
+    memset(&key, 0, sizeof(key));
+    memset(&data, 0, sizeof(data));
+
+    while (!curs->c_get(curs, &key, &data, DB_NEXT)) {
+        pgp_key.data = data.data;
+        pgp_key.len = data.size;
+
+        if (parse_key_metadata(&pgp_key))
+            continue;
+
+        strata_insert(estimator, pgp_key.hash);
         free(pgp_key.user_id);
     };
 
