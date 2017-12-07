@@ -12,6 +12,7 @@ int main(int argc, char **argv) {
     FILE *in;
     char *db_name;
     char *serv_root;
+    char *query;
     char verbose, create, ingest;
     struct pgp_key_t key;
     struct keydb_t *db;
@@ -22,6 +23,9 @@ int main(int argc, char **argv) {
     int i;
     int port;
 
+    struct pgp_key_t res_keys[16];
+    int results;
+
     struct inv_bloom_t *filter;
     struct inv_bloom_t *filter_db;
     assert(filter=ibf_allocate(2, 80));
@@ -31,9 +35,10 @@ int main(int argc, char **argv) {
     verbose = create = ingest = 0;
     port = 8080;
     db_name = "test.db";
+    query = NULL;
     serv_root = "static";
 
-    while ((opt = getopt(argc, argv, "cp:d:ivr:")) != -1) {
+    while ((opt = getopt(argc, argv, "cp:d:ivr:s:")) != -1) {
         switch (opt) {
             default:
             case '?': return -1;           break;
@@ -42,7 +47,8 @@ int main(int argc, char **argv) {
             case 'c': create = 1;          break;
             case 'i': ingest = 1;          break;
             case 'v': verbose = 1;         break;
-            case 'r': serv_root = optarg;; break;
+            case 'r': serv_root = optarg;  break;
+            case 's': query = optarg;      break;
         }
     }
 
@@ -50,7 +56,12 @@ int main(int argc, char **argv) {
     if (!db)
         return -1;
 
-    if (ingest) {
+    if (query) {
+        results = query_key_db(db, query, 16, res_keys, 0);
+        printf("Query \"%s\" matched %d keys\n", query, results);
+        for (i=0; i<results; i++)
+            pretty_print_key(&res_keys[i], "  ");
+    } else if (ingest) {
         for (i=optind; i<argc; i++) {
             in = fopen(argv[i], "rb");
             if (!in) {
@@ -85,7 +96,6 @@ int main(int argc, char **argv) {
         getc(stdin);
         stop_server(serv);
     }
-
 
     if (verbose)
         ibf_write(stdout, filter);

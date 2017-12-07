@@ -11,7 +11,7 @@ uint64_t FNV_1a_64_raw(uint8_t *buf, int n) {
     }
 
     return hash;
-}*/
+}
 
 uint64_t 
 FNV_1a_64_dual(uint64_t a, uint64_t b) {
@@ -32,4 +32,4 @@ FNV_1a_64_dual(uint64_t a, uint64_t b) {
     }
 
     return hash;
-}
+}*/

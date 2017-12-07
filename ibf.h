@@ -1,5 +1,5 @@
-#ifndef _IBF_H
-#define _IBF_H
+#ifndef IBF_H_
+#define IBF_H_
 
 #include <stdio.h>
 #include <stdint.h>

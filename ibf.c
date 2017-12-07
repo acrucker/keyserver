@@ -1,4 +1,5 @@
 #include "ibf.h"
+#include "util.h"
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
@@ -149,19 +150,6 @@ ibf_delete(struct inv_bloom_t *filter,
     ibf_insdel(filter, element, -1);
 }
 
-/* Returns non-zero iff a == b. */
-int
-ibf_fp160_eq(fp160 a, fp160 b) {
-    int i;
-    int diff;
-
-    diff = 0;
-    for (i=0; i<20; i++)
-        diff |= a[i]^b[i];
-
-    return diff;
-}
-
 /* Decodes one element from filter, if possible, returning the result into
  * the value pointed by element. Returns the number of elements removed. */
 int
@@ -179,7 +167,7 @@ ibf_decode(struct inv_bloom_t *filter /* Filter to search */,
 
         /* Check that both the hash and value match to the defined precision. */
         SHA1(filter->id_sums[i], 20, hash_val);
-        if (!ibf_fp160_eq(filter->id_sums[i], hash_val))
+        if (neq_fp160(filter->id_sums[i], hash_val))
             continue;
 
         memcpy(&element[0], &filter->id_sums[i], 20);
@@ -214,8 +202,6 @@ ibf_subtract(struct inv_bloom_t *filter_A,
     return 0;
 }
 
-
-
 /* Counts the number of elements in the bloom filter. */
 uint64_t
 ibf_count(struct inv_bloom_t *filter) {
@@ -241,12 +227,12 @@ ibf_write(FILE *out, struct inv_bloom_t *filter) {
 
     assert(out);
     assert(filter);
-    fprintf(out, "1 %d %lu\n", filter->k, filter->N);
+    fprintf(out, "1:%d:%lu\n", filter->k, filter->N);
     for (i=0; i<filter->N; i++) {
-        fprintf(out, "%d ", filter->counts[i]);
+        fprintf(out, "%d:", filter->counts[i]);
         for(j=0; j<20; j++)
             fprintf(out, "%02X", (filter->id_sums[i])[j]);
-        fprintf(out, " ");
+        fprintf(out, ":");
         for(j=0; j<20; j++)
             fprintf(out, "%02X", (filter->hash_sums[i])[j]);
         fprintf(out, "\n");

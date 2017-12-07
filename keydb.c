@@ -1,12 +1,14 @@
 #include "keydb.h"
 #include "key.h"
 #include "ibf.h"
+#include "util.h"
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <pthread.h>
 #include <string.h>
 #include <db.h>
+#include <assert.h>
 
 struct key_idx_t {
     int version;
@@ -15,7 +17,7 @@ struct key_idx_t {
     uint64_t id64;
     char *uid;
     fp160 fp;
-    fp160 keyid;
+    fp160 hash;
 };
 
 struct keydb_t {
@@ -28,10 +30,10 @@ struct keydb_t {
 
 int
 add_key_to_index(struct keydb_t *db, int version, int size, char *uid,
-                                fp160 keyid, fp160 fp, uint32_t id32, uint64_t id64) {
+                                fp160 hash, fp160 fp, uint32_t id32, uint64_t id64) {
     struct key_idx_t *tmp;
     int i;
-    
+
     if (db->idx_alloc <= db->idx_count) {
         db->idx_alloc += 1024*1024;
         tmp = realloc(db->key_idx, db->idx_alloc*sizeof(struct key_idx_t));
@@ -45,7 +47,7 @@ add_key_to_index(struct keydb_t *db, int version, int size, char *uid,
     db->key_idx[i].id32 = id32;
     db->key_idx[i].id64 = id64;
     db->key_idx[i].uid = uid;
-    memcpy(db->key_idx[i].keyid, keyid, sizeof(fp160));
+    memcpy(db->key_idx[i].hash, hash, sizeof(fp160));
     memcpy(db->key_idx[i].fp, fp, sizeof(fp160));
     return 0;
 }
@@ -84,12 +86,9 @@ open_key_db(const char *filename, char create) {
         if (parse_key_metadata(&pgp_key))
             continue;
 
-        if (add_key_to_index(ret, pgp_key.version, pgp_key.len, 
+        if (add_key_to_index(ret, pgp_key.version, pgp_key.len,
                     pgp_key.user_id, pgp_key.hash, pgp_key.fp, pgp_key.id32, pgp_key.id64))
             goto error;
-
-        if (ret->idx_count < 10)
-            pretty_print_key(&pgp_key, "");
     }
 
     printf("Index contains %d keys.\n", ret->idx_count);
@@ -101,6 +100,75 @@ error:
         return NULL;
     close_key_db(ret);
     return NULL;
+}
+
+/* Returns the number of keys found, up to max_results. */
+int
+query_key_db(struct keydb_t *db, const char *query, int max_results,
+        struct pgp_key_t *keys, char exact) {
+    /* Find the type of the query:
+     *      1=32-bit keyID,
+     *      2=64-bit keyID,
+     *      3=160-bit fingerprint,
+     *      4=user ID string.
+     * Autodetected using HKP format. */
+    char type;
+    int i;
+    int res_idx;
+    char tmp[3];
+
+    uint64_t id64;
+    uint32_t id32;
+    fp160 fp;
+
+    type = res_idx = 0;
+    tmp[2] = 0;
+
+    if (query[0] == '0' && query[1] == 'x') {
+        if (strlen(query) == 10) {
+            type = 1;
+            id32 = strtol(query, NULL, 16);
+        } else if (strlen(query) == 18) {
+            type = 2;
+            id64 = strtol(query, NULL, 16);
+        } else if (strlen(query) == 42) {
+            parse_fp160(query+2, fp);
+            type = 3;
+        }
+    } else {
+        type = 4;
+    }
+
+    if (!type) return 0;
+
+    for (i=0; i<db->idx_count; i++) {
+        switch(type) {
+            default:
+                return 0;
+                break;
+            case 1: if (db->key_idx[i].id32 != id32)
+                        continue;
+                    break;
+            case 2: if (db->key_idx[i].id64 != id64)
+                        continue;
+                    break;
+            case 3: if (neq_fp160(db->key_idx[i].fp, fp))
+                        continue;
+                    break;
+            case 4: if ((exact && !strstr(db->key_idx[i].uid, query))
+                    || (!exact && !strcasestr(db->key_idx[i].uid, query)))
+                        continue;
+                    break;
+    }
+
+        if (retrieve_key(db, &keys[res_idx], db->key_idx[i].hash))
+            break;
+        if (parse_key_metadata(&keys[res_idx]))
+            break;
+        if (++res_idx >= max_results)
+            break;
+    }
+    return res_idx;
 }
 
 int
@@ -134,7 +202,7 @@ insert_key(struct keydb_t *db, struct pgp_key_t *pgp_key) {
     key.size = 20;
     data.data = pgp_key->data;
     data.size = pgp_key->len;
-    
+
     ret = db->dbp->put(db->dbp, NULL, &key, &data, DB_NOOVERWRITE);
 
     if (ret == DB_KEYEXIST)
@@ -146,7 +214,7 @@ insert_key(struct keydb_t *db, struct pgp_key_t *pgp_key) {
 }
 
 int
-retrieve_key(struct keydb_t *db, struct pgp_key_t *pgp_key, fp160 keyid) {
+retrieve_key(struct keydb_t *db, struct pgp_key_t *pgp_key, fp160 hash) {
     DBT key, data;
     int ret;
 
@@ -157,7 +225,7 @@ retrieve_key(struct keydb_t *db, struct pgp_key_t *pgp_key, fp160 keyid) {
     memset(&key, 0, sizeof(key));
     memset(&data, 0, sizeof(data));
 
-    key.data = keyid;
+    key.data = hash;
     key.size = 20;
 
     ret = db->dbp->get(db->dbp, NULL, &key, &data, 0);
@@ -165,7 +233,9 @@ retrieve_key(struct keydb_t *db, struct pgp_key_t *pgp_key, fp160 keyid) {
     if (ret)
         return -1;
 
-    pgp_key->data = data.data;
+    if (!(pgp_key->data = malloc(data.size))) return -1;
+
+    memcpy(pgp_key->data, data.data, data.size);
     pgp_key->len = data.size;
 
     if (parse_key_metadata(pgp_key))

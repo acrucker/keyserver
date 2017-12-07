@@ -1,11 +1,15 @@
-#ifndef _KEYDB_H
-#define _KEYDB_H
+#ifndef KEYDB_H_
+#define KEYDB_H_
 
 #include "types.h"
 #include "ibf.h"
 
 struct keydb_t *
 open_key_db(const char *filename, char create);
+
+int
+query_key_db(struct keydb_t *db, const char *query, int max_results,
+        struct pgp_key_t *keys, char exact);
 
 int
 close_key_db(struct keydb_t *db);

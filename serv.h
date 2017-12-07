@@ -1,5 +1,5 @@
-#ifndef _SERV_H
-#define _SERV_H
+#ifndef SERV_H_
+#define SERV_H_
 
 #include <ulfius.h>
 
