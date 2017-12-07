@@ -23,14 +23,12 @@ int main(int argc, char **argv) {
     int opt;
     int i;
     int port;
+    int acc;
 
     struct pgp_key_t res_keys[16];
     int results;
 
-    struct inv_bloom_t *filter;
-    struct inv_bloom_t *filter_db;
-    assert(filter=ibf_allocate(2, 80));
-    assert(filter_db=ibf_allocate(2, 80));
+    struct inv_bloom_t *filters[16];
 
     read = total = 0;
     verbose = create = ingest = 0;
@@ -88,7 +86,6 @@ int main(int argc, char **argv) {
                 if(insert_key(db, &key))
                     return -1;
                 total += key.len;
-                ibf_insert(filter, key.hash);
                 free(key.data);
                 free(key.user_id);
                 read++;
@@ -99,18 +96,20 @@ int main(int argc, char **argv) {
         printf("Read %d keys (total %6.2f MiB).\n", read, total/1024.0/1024.0);
     } else {
         printf("Starting in server mode on port %d.\n", port);
-        assert(serv=start_server(port, serv_root, db));
+        acc = 10;
+        for (i=0; i<5; i++) {
+            assert(filters[i]=ibf_allocate(3, acc));
+            assert(!db_fill_ibf(db, filters[i]));
+            acc *= 2;
+        }
+        filters[i] = 0;
+        assert(serv=start_server(port, serv_root, db, filters));
         getc(stdin);
         stop_server(serv);
     }
 
-    if (verbose)
-        ibf_write(stdout, filter);
-
     if (close_key_db(db))
         return -1;
-    ibf_free(filter);
-    ibf_free(filter_db);
 
     return 0;
 }

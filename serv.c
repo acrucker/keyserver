@@ -256,6 +256,49 @@ int callback_hkp_lookup(const struct _u_request *request,
     }
 }
 
+int callback_bloom(const struct _u_request *request,
+                   struct _u_response *response,
+                   void *blooms_) {
+    char *resp;
+    int size, hcnt;
+    struct inv_bloom_t **blooms = blooms_;
+    int i;
+
+    printf("Received ibf request.\n");
+
+    /* These are required options. */
+    if (!u_map_has_key(request->map_url, "size"))
+        return reply_response_status(response, 400, "specify size");
+    else
+        size = atoi(u_map_get(request->map_url, "size"));
+
+    if (!u_map_has_key(request->map_url, "hcnt"))
+        return reply_response_status(response, 400, "specify number of hashes");
+    else
+        hcnt = atoi(u_map_get(request->map_url, "hcnt"));
+
+    printf("Parsed ibf request successfully:\n");
+    printf("\tsize=%d\n", size);
+    printf("\thcnt=%d\n", hcnt);
+
+    resp = NULL;
+    for (i=0; blooms[i]; i++) {
+        if(ibf_match(blooms[i], hcnt, size)) {
+            resp = ibf_write(blooms[i]);
+            break;
+        }
+    }
+
+    if (resp) {
+        response->binary_body = resp;
+        response->binary_body_length = strlen(resp);
+        response->status = 200;
+        return U_CALLBACK_COMPLETE;
+    } else {
+        return reply_response_status(response, 404, "size/hash count not found");
+    }
+}
+
 void free_static_stream(void *fd) {
     while (close(*(int*)fd) && errno == EINTR);
 }
@@ -296,7 +339,7 @@ int callback_static(const struct _u_request *request,
 }
 
 struct serv_state_t *
-start_server(short port, char *root, struct keydb_t *db) {
+start_server(short port, char *root, struct keydb_t *db, struct inv_bloom_t **ibfs) {
     struct serv_state_t *serv;
 
     if (!(serv=malloc(sizeof(struct serv_state_t))))
@@ -317,6 +360,8 @@ start_server(short port, char *root, struct keydb_t *db) {
     /* Add the key upload endpoint. */
     /* Add the difference estimator endpoint. */
     /* Add the bloom filter endpoint. */
+    ulfius_add_endpoint_by_val(&serv->inst, "GET", NULL, "/ibf/:hcnt/:size", 0,
+            &callback_bloom, ibfs);
     /* Add the system status endpoint. */
 
     /* Start the server. */

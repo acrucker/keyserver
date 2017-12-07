@@ -3,11 +3,12 @@
 
 #include <ulfius.h>
 #include "keydb.h"
+#include "ibf.h"
 
 struct serv_state_t;
 
 struct serv_state_t *
-start_server(short port, char *root, struct keydb_t *db);
+start_server(short port, char *root, struct keydb_t *db, struct inv_bloom_t **ibfs);
 
 void
 stop_server(struct serv_state_t *serv);

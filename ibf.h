@@ -12,6 +12,9 @@ struct inv_bloom_t *
 ibf_allocate(int    k /* Number of hashes per element */,
              size_t N /* Number of buckets */);
 
+int
+ibf_match(struct inv_bloom_t *filter, int k, size_t N);
+
 /* Allocates and returns a pointer to a bloom filter that is a copy of filter.
  * returns NULL in the case of failure. */
 struct inv_bloom_t *
@@ -51,8 +54,8 @@ ibf_subtract(struct inv_bloom_t *filter_A,
 uint64_t
 ibf_count(struct inv_bloom_t *filter);
 
-/* Writes out filter to an ASCII file. Returns 0 on success. */
-int
-ibf_write(FILE *out, struct inv_bloom_t *filter);
+/* Writes out filter to a buffer. Returns 0 on success. */
+char *
+ibf_write(struct inv_bloom_t *filter);
 
 #endif

@@ -49,6 +49,11 @@ fail:
     return NULL;
 }
 
+int
+ibf_match(struct inv_bloom_t *filter, int k, size_t N) {
+    return filter->k == k && filter->N == N;
+}
+
 struct inv_bloom_t *
 ibf_copy(struct inv_bloom_t *filter) {
     struct inv_bloom_t *copy;
@@ -221,22 +226,27 @@ ibf_count(struct inv_bloom_t *filter) {
 }
 
 /* Writes out filter to an ASCII file. Returns 0 on success. */
-int
-ibf_write(FILE *out, struct inv_bloom_t *filter) {
+char *
+ibf_write(struct inv_bloom_t *filter) {
+    char *buf;
     int i, j;
+    int w;
 
-    assert(out);
+    w = 0;
+    buf = malloc(100*filter->N);
+    if (!buf) return NULL;
+
     assert(filter);
-    fprintf(out, "1:%d:%lu\n", filter->k, filter->N);
+    w += sprintf(buf+w, "1:%d:%lu\n", filter->k, filter->N);
     for (i=0; i<filter->N; i++) {
-        fprintf(out, "%d:", filter->counts[i]);
+        w += sprintf(buf+w, "%d:", filter->counts[i]);
         for(j=0; j<20; j++)
-            fprintf(out, "%02X", (filter->id_sums[i])[j]);
-        fprintf(out, ":");
+            w += sprintf(buf+w, "%02X", (filter->id_sums[i])[j]);
+        w += sprintf(buf+w, ":");
         for(j=0; j<20; j++)
-            fprintf(out, "%02X", (filter->hash_sums[i])[j]);
-        fprintf(out, "\n");
+            w += sprintf(buf+w, "%02X", (filter->hash_sums[i])[j]);
+        w += sprintf(buf+w, "\n");
     }
-    return 0;
+    return buf;
 }
 
