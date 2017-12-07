@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <string.h>
 
 #include <openssl/sha.h>
 
@@ -108,62 +109,66 @@ parse_packet_header(uint8_t *pkt,
     return 0;
 }
 
-#if 0
-uint64_t
-get_key_id(uint8_t *pkt, uint64_t pkt_len) {
+int
+get_key_id(uint8_t *pkt, uint64_t pkt_len, int *v, fp160 fp, uint32_t *id32, uint64_t *id64) {
     uint8_t *buf;
-    uint64_t ret;
-    fp160 fp;
-    int i;
+    int ret, i;
+    uint64_t tmp;
 
+    ret = 0;
+    tmp = 0;
     buf = malloc((pkt_len+3)*sizeof(uint8_t));
     if (!buf)
-        goto error;
+        return -1;
 
     switch (pkt[0]) {
-        /* Key ID is the low 64 bits of the public modulus. */
-        case 2:
+        /* v3 keys are too old to require support. */
         case 3:
+            memset(fp, 0, sizeof(fp160));
+            ret = -1;
             break;
         /* Key ID is calculated through hashing. */
         case 4:
             buf[0] = 0x99;
-            buf[1] = pkt_len&0xFF00>>8;
+            buf[1] = (pkt_len&0xFF00)>>8;
             buf[2] = pkt_len&0xFF;
             memcpy(&buf[3], pkt, pkt_len);
             SHA1(buf, pkt_len+3, fp);
-
-            ret = 0;
-            for(i=0; i<8; i++) {
-                ret <<= 8;
-                ret |= fp[i];
+            for (i=12; i<20; i++) {
+                tmp <<= 8;
+                tmp |= fp[i];
             }
+            *v = 4;
             break;
         default:
             ret = -1;
-
     }
+
+    *id64 = tmp;
+    *id32 = tmp&0xFFFFFFFF;
 
     free(buf);
     return ret;
 }
-#endif
 
 void
 pretty_print_key(struct pgp_key_t *key, char *prefix) {
     int i;
 
-    printf("%sPGP key (length %lu octets)\n", prefix, key->len);
-    printf("%s\tH: ", prefix);
-
+    printf("%sPGP key (v%d, length %lu octets)\n", prefix, key->version, key->len);
+    printf("%s\t   H: ", prefix);
     for (i=0; i<20; i++)
         printf("%02X", key->hash[i]);
-    printf("\n");
+    printf("\n%s\t  FP: ", prefix);
+    for (i=0; i<20; i++)
+        printf("%02X", key->fp[i]);
+    printf("\n%s\tID64: %016lX\n%s\tID32: %08X\n", prefix, key->id64, prefix, key->id32);
+    printf("%s\t UID: %s\n", prefix, key->user_id);
 }
 
 int
 parse_key_metadata(struct pgp_key_t *key) {
-    /*uint8_t *pkt_ptr;*/
+    uint8_t *pkt_ptr;
     uint8_t hdr_len;
     uint8_t type;
     uint64_t pkt_len;
@@ -174,21 +179,28 @@ parse_key_metadata(struct pgp_key_t *key) {
     /* Make a hash of the entire key */
     SHA1(key->data, key->len, key->hash);
 
+    key->user_id = 0;
+
     while (!parse_packet_header(key->data+offset, &hdr_len, &type, &pkt_len)) {
         /* Packets can't extend beyond the end of the key's data. */
         if (offset+hdr_len+pkt_len > key->len)
-            return -1;
+            goto error;
 
         /* Pointer to the first byte of the packet. */
-        /*pkt_ptr = key->data+offset+hdr_len;*/
+        pkt_ptr = key->data+offset+hdr_len;
 
         switch (type) {
         /* Public key packet. */
         case 6:
-            /*key->fp = get_key_id(pubkey_pkt, pkt_len); */
+            if (get_key_id(pkt_ptr, pkt_len, &key->version, key->fp, 
+                        &key->id32, &key->id64)) goto error;;
             break;
         /* User ID packet. */
         case 13:
+            if (key->user_id) break;
+            if (!(key->user_id = malloc((pkt_len+1)*sizeof(uint8_t)))) goto error;;
+            memcpy(key->user_id, pkt_ptr, pkt_len*sizeof(uint8_t));
+            key->user_id[pkt_len] = '\0';
             break;
         /* Will skip most packets. */
         default:
@@ -201,6 +213,10 @@ parse_key_metadata(struct pgp_key_t *key) {
     }
 
     return 0;
+error:
+    if (key->user_id)
+        free(key->user_id);
+    return -1;
 }
 
 int
@@ -266,6 +282,6 @@ parse_from_dump(FILE *in, struct pgp_key_t *key) {
         return -1;
     }
 
-    return parse_key_metadata(key);
+    return 0;
 }
 

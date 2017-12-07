@@ -9,10 +9,13 @@ struct keydb_t;
 typedef uint8_t fp160[20];
 
 struct pgp_key_t {
-    uint8_t *data;
     size_t len;
-    uint64_t fp;
+    int version;
+    uint8_t *data;
+    uint64_t id64;
+    uint32_t id32;
     char *user_id;
+    fp160 fp;
     fp160 hash;
 };
 

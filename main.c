@@ -59,12 +59,15 @@ int main(int argc, char **argv) {
             }
             
             while (!parse_from_dump(in, &key)) {
+                if (parse_key_metadata(&key))
+                    continue;
                 if(insert_key(db, &key))
                     return -1;
                 /*pretty_print_key(&key, "");*/
                 total += key.len;
                 ibf_insert(filter, key.hash);
                 free(key.data);
+                free(key.user_id);
                 read++;
             }
 
