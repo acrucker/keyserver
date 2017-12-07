@@ -294,6 +294,8 @@ start_server(short port, char *root, struct keydb_t *db) {
             &callback_static, root);
     /* Add the key download endpoint. */
     /* Add the key upload endpoint. */
+    /* Add the difference estimator endpoint. */
+    /* Add the bloom filter endpoint. */
     /* Add the system status endpoint. */
 
     /* Start the server. */

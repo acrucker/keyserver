@@ -13,6 +13,7 @@ int main(int argc, char **argv) {
     char *db_name;
     char *serv_root;
     char *query;
+    char *tmp;
     char verbose, create, ingest;
     struct pgp_key_t key;
     struct keydb_t *db;
@@ -61,6 +62,18 @@ int main(int argc, char **argv) {
         printf("Query \"%s\" matched %d keys\n", query, results);
         for (i=0; i<results; i++)
             pretty_print_key(&res_keys[i], "  ");
+        if (results == 1) {
+            tmp = ascii_armor_key(&res_keys[0]);
+            printf("\n%s\n", tmp);
+            if (ascii_parse_key(tmp, &key)) {
+                printf("Failed to parse generated key.\n");
+            } else {
+                printf("Parsed generated key:\n");
+                parse_key_metadata(&key);
+                pretty_print_key(&key, "");
+                printf("%s\n", ascii_armor_key(&key));
+            }
+        }
     } else if (ingest) {
         for (i=optind; i<argc; i++) {
             in = fopen(argv[i], "rb");
@@ -74,7 +87,6 @@ int main(int argc, char **argv) {
                     continue;
                 if(insert_key(db, &key))
                     return -1;
-                /*pretty_print_key(&key, "");*/
                 total += key.len;
                 ibf_insert(filter, key.hash);
                 free(key.data);
@@ -85,11 +97,6 @@ int main(int argc, char **argv) {
             fclose(in);
         }
         printf("Read %d keys (total %6.2f MiB).\n", read, total/1024.0/1024.0);
-        printf("IBF contains %lu keys.\n", ibf_count(filter));
-        db_fill_ibf(db, filter_db);
-        printf("IBF from DB contains %lu keys.\n", ibf_count(filter_db));
-        ibf_subtract(filter_db, filter);
-        printf("IBF difference contains %lu keys.\n", ibf_count(filter_db));
     } else {
         printf("Starting in server mode on port %d.\n", port);
         assert(serv=start_server(port, serv_root, db));

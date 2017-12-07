@@ -3,12 +3,16 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
+#include <ctype.h>
 
 #include <openssl/sha.h>
 
 #define RD_BYTE(v, f) \
     if (1 != fread(&v, sizeof(uint8_t), 1, f)) \
         return -1;
+
+#define START_ASCII "-----BEGIN PGP PUBLIC KEY BLOCK-----"
+#define END_ASCII "-----END PGP PUBLIC KEY BLOCK-----"
 
 uint64_t
 rd_n_bytes(FILE *in, int n) {
@@ -283,5 +287,228 @@ parse_from_dump(FILE *in, struct pgp_key_t *key) {
     }
 
     return 0;
+}
+
+void
+ascii_armor_24b(uint32_t val, char enc[5]) {
+    int j;
+
+    for (j=3; j>=0; j--) {
+        enc[j] = val&0x3F;
+        val >>= 6;  /* IBM doesn't deserve nice things. */
+        if (enc[j] < 26)      enc[j] = 'A'+enc[j];
+        else if (enc[j] < 52) enc[j] = 'a'+(enc[j]-26);
+        else if (enc[j] < 62) enc[j] = '0'+(enc[j]-52);
+        else if (enc[j] < 63) enc[j] = '+';
+        else                  enc[j] = '/';
+    }
+}
+
+/* Adapted from the implementation on Page 54 of RFC 4880. */
+#define CRC24_INIT 0xB704CEL
+#define CRC24_POLY 0x1864CFBL
+
+long crc_octets(unsigned char *octets, size_t len)
+{
+    long crc = CRC24_INIT;
+    int i;
+    while (len--) {
+        crc ^= (*octets++) << 16;
+        for (i = 0; i < 8; i++) {
+            crc <<= 1;
+            if (crc & 0x1000000)
+                crc ^= CRC24_POLY;
+        }
+    }
+    return crc & 0xFFFFFFL;
+}
+
+char *
+ascii_armor_key(struct pgp_key_t *key) {
+    char *buf;
+    int line_written, i;
+    int printed;
+    uint32_t tmp;
+    char enc[5];
+    
+    buf = malloc(key->len*2+1024);
+    if (!buf) return NULL;
+
+    line_written = 0;
+    enc[4] = 0;
+    printed = 0;
+
+    printed += sprintf(buf+printed, START_ASCII "\n\n");
+    for (i=0; i<key->len; i+=3) {
+        if (line_written == 64) {
+            line_written = 0;
+            printed += sprintf(buf+printed, "\n");
+        }
+        if (i+2 < key->len)
+            tmp = (key->data[i]<<16) | (key->data[i+1]<<8) | (key->data[i+2]);
+        else if (i+2 == key->len)
+            tmp = (key->data[i]<<16) | (key->data[i+1]<<8);
+        else if (i+1 == key->len)
+            tmp = (key->data[i]<<16);
+
+        ascii_armor_24b(tmp, enc);
+
+        if (i+2 == key->len)
+            enc[3] = '=';
+        else if (i+1 == key->len)
+            enc[2] = enc[3] = '=';
+
+        printed += sprintf(buf+printed, "%s", enc);
+        line_written += 4;
+    }
+    tmp = crc_octets(key->data, key->len);
+    ascii_armor_24b(tmp, enc);
+    printed += sprintf(buf+printed, "\n=%s", enc);
+    printed += sprintf(buf+printed, "\n" END_ASCII);
+    return buf;
+}
+
+int
+r64_decode(char c) {
+    if (isupper(c))
+        return c-'A';
+    else if (islower(c))
+        return c-'a'+26;
+    else if (isdigit(c))
+        return c-'0'+52;
+    else if (c == '+')
+        return 62;
+    else if (c == '/')
+        return 63;
+    else
+        assert(0);
+}
+
+int
+ascii_parse_key(const char *buf, struct pgp_key_t *key) {
+    int consec_nl;
+    int n_ascii_ch, n_pad, n_crc;
+    int tmp_cnt;
+    int data_pos;
+    char c;
+    const char *bulk_start, *crc_start;
+    uint32_t tmp;
+    key->data = NULL;
+    /* Start by verifying that buf conforms to ASCII-armor spec; get len.*/
+    if (strstr(buf, START_ASCII) != buf) goto error;
+    buf += strlen(START_ASCII);
+    /* Look for two line endings with no intervening non-whitespace */
+    consec_nl = 0;
+    while ((c = *buf++)) {
+        switch (c) {
+            case '\n':
+                consec_nl++;
+                break;
+            default:
+                if (!isspace(c))
+                    consec_nl = 0;
+                break;
+        }
+        if (consec_nl == 2)
+            break;
+    }
+    if (!c) goto error;
+    /* Now count the number of characters in the buffer. */
+    n_ascii_ch = n_pad = 0;
+    bulk_start = buf;
+    while ((c = *buf++)) {
+        if (isspace(c))
+            continue;
+        else if (isalnum(c) || c == '/' || c == '+')
+            n_ascii_ch++;
+        else if (c == '=') {
+            if ((n_ascii_ch+n_pad)%4)
+                n_pad++;
+            else
+                /* This is the pre-CRC = */
+                break;
+        } else {
+            goto error;
+        }
+    }
+    if (!c) goto error;
+    /* Now count the number of characters in the crc. */
+    n_crc = 0;
+    crc_start = buf;
+    while ((c = *buf++)) {
+        if (isspace(c))
+            continue;
+        else if (isalnum(c) || c == '/' || c == '+')
+            n_crc++;
+        else if (c == '-') {
+            buf--;
+            /* This is the ending line*/
+            break;
+        } else {
+            goto error;
+        }
+    }
+    if (!c) goto error;
+    if (strstr(buf, END_ASCII) != buf) goto error;
+    if (n_crc != 4) goto error;
+    if ((n_ascii_ch+n_pad)%4 != 0) goto error;
+    if (n_pad > 2) goto error;
+
+    /* Start the actual parsing. */
+    key->len = 3*(n_ascii_ch+n_pad)/4-n_pad;
+    if (!(key->data = malloc(key->len))) goto error;
+    tmp_cnt = 0;
+    data_pos = 0;
+
+    while ((c = *bulk_start++)) {
+        if (isspace(c))
+            continue;
+        if (isalnum(c) || c == '/' || c == '+') {
+            tmp <<= 6;
+            tmp |= r64_decode(c);
+            tmp_cnt++;
+        }
+        if (c == '=') {
+            if (tmp_cnt == 2)
+                tmp <<= 12;
+            else if (tmp_cnt == 3)
+                tmp <<= 6;
+            else 
+                goto error;
+            tmp_cnt = 4;
+        }
+        if (tmp_cnt == 4) {
+            if (data_pos+2 < key->len)
+                key->data[data_pos+2] = tmp&0xFF;
+            if (data_pos+1 < key->len)
+                key->data[data_pos+1] = (tmp>>8)&0xFF;
+            assert(data_pos < key->len);
+            key->data[data_pos] = (tmp>>16)&0xFF;
+            data_pos += 3;
+            tmp = 0;
+            tmp_cnt = 0;
+        }
+        if (data_pos >= key->len)
+            break;
+    }
+    while ((c = *crc_start++)) {
+        if (isspace(c))
+            continue;
+        if (isalnum(c) || c == '/' || c == '+') {
+            tmp <<= 6;
+            tmp |= r64_decode(c);
+            tmp_cnt++;
+        }
+        if (tmp_cnt == 4) {
+            if (tmp != crc_octets(key->data, key->len))
+                goto error;
+            break;
+        }
+    }
+    return 0;
+error:
+    if (key->data)
+        free(key->data);
+    return -1;
 }
 

@@ -18,4 +18,12 @@ pretty_print_key(struct pgp_key_t *key, char *prefix);
 int
 parse_key_metadata(struct pgp_key_t *key);
 
+/* Produces the ASCII-armor representation of a public key. */
+char *
+ascii_armor_key(struct pgp_key_t *key);
+
+/* Attempts to parse an ASCII-armored key. */
+int
+ascii_parse_key(const char *buf, struct pgp_key_t *key);
+
 #endif
