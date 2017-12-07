@@ -190,7 +190,7 @@ ibf_decode(struct inv_bloom_t *filter /* Filter to search */,
 
 int
 ibf_subtract(struct inv_bloom_t *filter_A,
-             struct inv_bloom_t *filter_B) {
+       const struct inv_bloom_t *filter_B) {
     size_t i;
 
     if (!filter_A)                        return -1;
