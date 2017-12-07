@@ -23,6 +23,8 @@ int reply_response_status(struct _u_response *response,
     switch(status) {
         default:  status = 500;
         case 500: expl   = "Internal server error"; break;
+        case 501: expl   = "Not implemented";       break;
+        case 400: expl   = "Bad request";           break;
         case 403: expl   = "Invalid path";          break;
         case 404: expl   = "File not found";        break;
         case 302: expl   = "Redirecting";           break;
@@ -51,6 +53,59 @@ callback_static_stream(void *fd, uint64_t offset, char *out_buf, size_t max) {
     } else {
         return bytes_read;
     }
+}
+
+int callback_hkp_lookup(const struct _u_request *request,
+                        struct _u_response *response,
+                        void *db) {
+    char mr, exact, fingerprint, get, index, vindex;
+    const char *op, *search;
+    char *options, *opt_tok;
+
+    mr = exact = fingerprint = get = index = vindex = 0;
+    printf("Received HKP request.\n");
+
+    if (!u_map_has_key(request->map_url, "op"))
+        return reply_response_status(response, 400, "Specify operation");
+
+    if (!u_map_has_key(request->map_url, "search"))
+        return reply_response_status(response, 400, "Specify search query");
+
+    op = u_map_get(request->map_url, "op");
+    if      (!strcmp(op,"get"))    get    = 1;
+    else if (!strcmp(op,"index"))  index  = 1;
+    else if (!strcmp(op,"vindex")) vindex = 1;
+    else return reply_response_status(response, 400, "Invalid operation");
+
+    search = u_map_get(request->map_url, "search");
+
+    if (u_map_has_key(request->map_url, "fingerprint")
+            && !strcmp(u_map_get(request->map_url, "fingerprint"), "on"))
+        fingerprint = 1;
+
+    if (u_map_has_key(request->map_url, "exact")
+            && !strcmp(u_map_get(request->map_url, "exact"), "on"))
+        exact = 1;
+
+    options = NULL;
+    if (u_map_has_key(request->map_url, "options"))
+        options = strndup(u_map_get(request->map_url, "options"), BUF_SIZE);
+    if (options) {
+        opt_tok = strtok(options, ",");
+        while (opt_tok) {
+            if (!strcmp(opt_tok,"mr")) mr = 1;
+            opt_tok = strtok(NULL, ",");
+        }
+        free(options);
+    }
+
+    printf("Parsed HKP request successfully:\n");
+    printf("\top=%s\n\tquery=%s\n\tfingerprint=%d\n\tmr=%d\n\texact=%d\n",
+            get ? "get" : index ? "index" : vindex ? "vindex" : "error",
+            search, fingerprint, mr, exact);
+
+
+    return reply_response_status(response, 500, NULL);
 }
 
 void free_static_stream(void *fd) {
@@ -106,6 +161,8 @@ start_server(short port, char *root) {
     ulfius_add_endpoint_by_val(&serv->inst, "GET", NULL, "/", 0,
             &callback_index, NULL);
     /* Add a key search endpoint. */
+    ulfius_add_endpoint_by_val(&serv->inst, "GET", NULL, "/pks/lookup", 0,
+            &callback_hkp_lookup, NULL);
     /* Add an endpoint for static files with lowest priority.*/
     ulfius_add_endpoint_by_val(&serv->inst, "GET", NULL, "/*", 100,
             &callback_static, root);
