@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
         return -1;
 
     if (query) {
-        results = query_key_db(db, query, 16, res_keys, 0);
+        results = query_key_db(db, query, 16, res_keys, 0, 0);
         printf("Query \"%s\" matched %d keys\n", query, results);
         for (i=0; i<results; i++)
             pretty_print_key(&res_keys[i], "  ");
@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
         printf("IBF difference contains %lu keys.\n", ibf_count(filter_db));
     } else {
         printf("Starting in server mode on port %d.\n", port);
-        assert(serv=start_server(port, serv_root));
+        assert(serv=start_server(port, serv_root, db));
         getc(stdin);
         stop_server(serv);
     }

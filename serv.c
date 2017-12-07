@@ -5,11 +5,13 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <string.h>
+#include <assert.h>
 
 #include "serv.h"
 
 #define PATH_LEN 256
-#define BUF_SIZE 16384
+#define BUF_SIZE (1024*1024)
+#define MAX_RESULTS 1000
 
 struct serv_state_t {
     struct _u_instance inst;
@@ -55,19 +57,126 @@ callback_static_stream(void *fd, uint64_t offset, char *out_buf, size_t max) {
     }
 }
 
+int
+html_escape_string_UTF8(char *out_buf, size_t out_size, char *in_buf) {
+    char c;
+    int printed;
+    int this_len;
+    uint32_t code_point;
+    char app_buf[11];
+    char *app;
+
+    printed = 0;
+    if (out_size == 0)
+        return 0;
+
+    /* Read the next input character */
+    while ((c = *in_buf++)) {
+        code_point = 0;
+        /* Find the number of bytes necessary to write the next escaped
+         * character. */
+        if (c == '<')        { app = "&lt;"; 
+        } else if (c == '>') { app = "&gt;"; 
+        } else if (c == '&') { app = "&amp;"; 
+        } else if (c == '"') { app = "&quot;";
+        } else if (c == '\'') { app = "&#x27;";
+        } else if (c == '/') { app = "&#x2F;";
+        } else if ((c&0x80) == 0x00) { 
+            /* ASCII fast-path. */
+            if (out_size == 1)
+                break;
+            *out_buf++ = c;
+            out_size--;
+            printed++;
+            continue;
+        } else if ((c&0xE0) == 0xC0) {
+            code_point = (c&0x1F);
+            c = *in_buf++; if (!c || ((c&0xC0) != 0x80)) break; 
+            code_point <<= 6; code_point |= c&0x3F;
+        } else if ((c&0xF0) == 0xE0) { 
+            code_point = (c&0x0F);
+            c = *in_buf++; if (!c || ((c&0xC0) != 0x80)) break; 
+            code_point <<= 6; code_point |= c&0x3F;
+            c = *in_buf++; if (!c || ((c&0xC0) != 0x80)) break; 
+            code_point <<= 6; code_point |= c&0x3F;
+        } else if ((c&0xF8) == 0xF0) {
+            code_point = (c&0x07);
+            c = *in_buf++; if (!c || ((c&0xC0) != 0x80)) break; 
+            code_point <<= 6; code_point |= c&0x3F;
+            c = *in_buf++; if (!c || ((c&0xC0) != 0x80)) break; 
+            code_point <<= 6; code_point |= c&0x3F;
+            c = *in_buf++; if (!c || ((c&0xC0) != 0x80)) break; 
+            code_point <<= 6; code_point |= c&0x3F;
+        }
+
+        assert(code_point <= 0x10FFFF);
+        if (code_point) {
+            sprintf(app_buf, "&#x%X;",code_point);
+            app = app_buf;
+        }
+
+        if (out_size < strlen(app)+1)
+            break;
+    
+        this_len = sprintf(out_buf, "%s", app);
+        printed += this_len;
+        out_buf += this_len;
+    }
+    *out_buf = 0;
+    return printed;
+}
+
+char *
+pretty_print_index_html(struct pgp_key_t *results, int num_results, const char *query, char exact, int after) {
+    char *buf;
+    char uid_escape_buf[1024];
+    int buf_len, printed, i, j, epos;
+
+    printed = 0;
+    buf_len = 4096*num_results+8192;
+
+    buf = malloc(buf_len);
+    if (!buf) goto error;
+
+    printed += snprintf(buf+printed, buf_len-printed,
+"<html><title>AKS Search Results</title>\r\n"
+"<body><h1>Results %d to %d for query \"%s\"</h1>\r\n",
+    after+1, num_results+after, query);
+    if (printed > buf_len) goto error;
+
+    for (i=0; i<num_results; i++) {
+        j=epos=0;
+        html_escape_string_UTF8(uid_escape_buf, 1024, results[i].user_id);
+        printed += snprintf(buf+printed, buf_len-printed,
+"<p>FP=%08X UID=\"%s\"</p>\r\n", results[i].id32, uid_escape_buf);
+        if (printed > buf_len) goto error;
+    }
+    printed += snprintf(buf+printed, buf_len-printed, "</body>");
+    if (printed > buf_len) goto error;
+    return buf;
+error:
+    free(buf);
+    return NULL;
+}
+
 int callback_hkp_lookup(const struct _u_request *request,
                         struct _u_response *response,
-                        void *db) {
+                        void *db_) {
     char mr, exact, fingerprint, get, index, vindex;
     const char *op, *search;
     char *options, *opt_tok;
+    struct keydb_t *db = db_;
+    int num_results, after;
+    struct pgp_key_t results[MAX_RESULTS];
+    char *resp;
 
+    after = 0;
     mr = exact = fingerprint = get = index = vindex = 0;
     printf("Received HKP request.\n");
 
+    /* These are required options. */
     if (!u_map_has_key(request->map_url, "op"))
         return reply_response_status(response, 400, "Specify operation");
-
     if (!u_map_has_key(request->map_url, "search"))
         return reply_response_status(response, 400, "Specify search query");
 
@@ -82,10 +191,12 @@ int callback_hkp_lookup(const struct _u_request *request,
     if (u_map_has_key(request->map_url, "fingerprint")
             && !strcmp(u_map_get(request->map_url, "fingerprint"), "on"))
         fingerprint = 1;
-
     if (u_map_has_key(request->map_url, "exact")
             && !strcmp(u_map_get(request->map_url, "exact"), "on"))
         exact = 1;
+
+    if (u_map_has_key(request->map_url, "after"))
+        after = atoi(u_map_get(request->map_url, "after"));
 
     options = NULL;
     if (u_map_has_key(request->map_url, "options"))
@@ -104,8 +215,23 @@ int callback_hkp_lookup(const struct _u_request *request,
             get ? "get" : index ? "index" : vindex ? "vindex" : "error",
             search, fingerprint, mr, exact);
 
-
-    return reply_response_status(response, 500, NULL);
+    if (index) {
+        num_results = query_key_db(db, search, MAX_RESULTS, results, exact, after);
+        resp = pretty_print_index_html(results, num_results, search, exact, after);
+        if (resp) {
+            response->binary_body = resp;
+            response->binary_body_length = strlen(resp);
+            response->status = 200;
+            return U_CALLBACK_COMPLETE;
+        } else {
+            return reply_response_status(response, 502, "malloc");
+        }
+    } else if (vindex) {
+        return reply_response_status(response, 501, "vindex not supported");
+    } else if (get) {
+        return reply_response_status(response, 501, "get not supported");
+    }
+    assert(0);
 }
 
 void free_static_stream(void *fd) {
@@ -148,7 +274,7 @@ int callback_static(const struct _u_request *request,
 }
 
 struct serv_state_t *
-start_server(short port, char *root) {
+start_server(short port, char *root, struct keydb_t *db) {
     struct serv_state_t *serv;
 
     if (!(serv=malloc(sizeof(struct serv_state_t))))
@@ -162,7 +288,7 @@ start_server(short port, char *root) {
             &callback_index, NULL);
     /* Add a key search endpoint. */
     ulfius_add_endpoint_by_val(&serv->inst, "GET", NULL, "/pks/lookup", 0,
-            &callback_hkp_lookup, NULL);
+            &callback_hkp_lookup, db);
     /* Add an endpoint for static files with lowest priority.*/
     ulfius_add_endpoint_by_val(&serv->inst, "GET", NULL, "/*", 100,
             &callback_static, root);

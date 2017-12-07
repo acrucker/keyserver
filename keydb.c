@@ -105,7 +105,7 @@ error:
 /* Returns the number of keys found, up to max_results. */
 int
 query_key_db(struct keydb_t *db, const char *query, int max_results,
-        struct pgp_key_t *keys, char exact) {
+        struct pgp_key_t *keys, char exact, int after) {
     /* Find the type of the query:
      *      1=32-bit keyID,
      *      2=64-bit keyID,
@@ -147,8 +147,8 @@ query_key_db(struct keydb_t *db, const char *query, int max_results,
                 return 0;
                 break;
             case 1: if (db->key_idx[i].id32 != id32)
-                        continue;
-                    break;
+                        continue; /* Try the next key. */
+                    break;        /* Add this key to the results. */
             case 2: if (db->key_idx[i].id64 != id64)
                         continue;
                     break;
@@ -159,12 +159,18 @@ query_key_db(struct keydb_t *db, const char *query, int max_results,
                     || (!exact && !strcasestr(db->key_idx[i].uid, query)))
                         continue;
                     break;
-    }
-
+        }
+        /* Skip a user-specified number of keys for pagination. */
+        if (after) {
+            after--;
+            continue;
+        }
+        /* Get the key into the next slot from BDB. */
         if (retrieve_key(db, &keys[res_idx], db->key_idx[i].hash))
             break;
         if (parse_key_metadata(&keys[res_idx]))
             break;
+        /* Limit the total number of keys. */
         if (++res_idx >= max_results)
             break;
     }

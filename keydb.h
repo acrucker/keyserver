@@ -9,7 +9,7 @@ open_key_db(const char *filename, char create);
 
 int
 query_key_db(struct keydb_t *db, const char *query, int max_results,
-        struct pgp_key_t *keys, char exact);
+        struct pgp_key_t *keys, char exact, int after);
 
 int
 close_key_db(struct keydb_t *db);
