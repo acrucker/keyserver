@@ -15,6 +15,7 @@ int main(int argc, char **argv) {
     FILE *in;
     char *db_name;
     char *serv_root;
+    char *peer_srv;
     char *query;
     char *tmp;
     char verbose, create, ingest;
@@ -33,6 +34,7 @@ int main(int argc, char **argv) {
     int results;
 
     struct inv_bloom_t *filters[16];
+    struct inv_bloom_t *filter_down;
     struct strata_estimator_t *strata[2];
 
     assert(strata[0]=strata_allocate(2, 10, 64));
@@ -44,9 +46,10 @@ int main(int argc, char **argv) {
     db_name = "test.db";
     query = NULL;
     serv_root = "static";
+    peer_srv = NULL;
     excl_pct = 0.0;
 
-    while ((opt = getopt(argc, argv, "cp:d:ivr:s:e:")) != -1) {
+    while ((opt = getopt(argc, argv, "cp:d:ivr:s:e:g:")) != -1) {
         switch (opt) {
             default:
             case '?': return -1;               break;
@@ -58,14 +61,31 @@ int main(int argc, char **argv) {
             case 'r': serv_root = optarg;      break;
             case 's': query = optarg;          break;
             case 'e': excl_pct = atof(optarg); break;
+            case 'g': peer_srv = optarg;       break;
         }
     }
 
     db = open_key_db(db_name, create);
     if (!db)
         return -1;
+    acc = 10;
+    for (i=0; i<7; i++) {
+        assert(filters[i]=ibf_allocate(3, acc));
+        assert(!db_fill_ibf(db, filters[i]));
+        acc *= 2;
+    }
+    filters[i] = 0;
+    printf("Filling strata from database.\n");
+    assert(!db_fill_strata(db, strata[0]));
+    /*strata_counts(strata);*/
 
-    if (query) {
+    if (peer_srv) {
+        if ((filter_down = download_inv_bloom(peer_srv, 3, 20))) {
+            printf("Downloaded filter.\n");
+        } else { 
+            printf("Failed to download filter.\n");
+        }
+    } else if (query) {
         results = query_key_db(db, query, 16, res_keys, 0, 0);
         printf("Query \"%s\" matched %d keys\n", query, results);
         for (i=0; i<results; i++)
@@ -111,16 +131,6 @@ int main(int argc, char **argv) {
         }
         printf("Read %d keys (total %6.2f MiB).\n", read, total/1024.0/1024.0);
     } else {
-        acc = 10;
-        for (i=0; i<7; i++) {
-            assert(filters[i]=ibf_allocate(3, acc));
-            assert(!db_fill_ibf(db, filters[i]));
-            acc *= 2;
-        }
-        filters[i] = 0;
-        printf("Filling strata from database.\n");
-        assert(!db_fill_strata(db, strata[0]));
-        /*strata_counts(strata);*/
         printf("Starting in server mode on port %d.\n", port);
         assert(serv=start_server(port, serv_root, db, filters, strata));
         getc(stdin);
@@ -129,6 +139,13 @@ int main(int argc, char **argv) {
 
     if (close_key_db(db))
         return -1;
+
+    for (i=0;;i++) {
+        if (!filters[i])
+            break;
+        ibf_free(filters[i]);
+    }
+    strata_free(strata[0]);
 
     return 0;
 }

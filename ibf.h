@@ -58,4 +58,8 @@ ibf_count(struct inv_bloom_t *filter);
 char *
 ibf_write(struct inv_bloom_t *filter);
 
+/* Allocates and parses an ibf from a string. Returns NULL on failure. */
+struct inv_bloom_t *
+ibf_from_string(char *string);
+
 #endif

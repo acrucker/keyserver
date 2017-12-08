@@ -250,3 +250,43 @@ ibf_write(struct inv_bloom_t *filter) {
     return buf;
 }
 
+struct inv_bloom_t *
+ibf_from_string(char *string) {
+    int k, N, i, cnt;
+    char *sptr, *line;
+    struct inv_bloom_t *filter;
+    char bufA[40], bufB[40];
+    fp160 buf;
+
+    filter = NULL;
+    line = strtok_r(string, "\r\n", &sptr);
+    if (!line) goto error;
+    if (2 != sscanf(line, "1:%d:%d", &k, &N))
+        goto error;
+
+    /*printf("Detected k=%d, N=%d\n", k, N);*/
+
+    filter = ibf_allocate(k, N);
+
+    for (i=0; i<N; i++) {
+        line = strtok_r(NULL, "\r\n", &sptr);
+        if (!line) goto error;
+        if (3 != sscanf(line, "%d:%40c:%40c", &cnt, bufA, bufB)) goto error;
+
+        filter->counts[i] = cnt;
+        parse_fp160(bufA, buf);
+        ibf_fp160_xor(filter->id_sums[i], buf);
+        parse_fp160(bufB, buf);
+        ibf_fp160_xor(filter->hash_sums[i], buf);
+    }
+
+    if (!filter) goto error;
+
+    return filter;
+
+error:
+    if (filter)
+        ibf_free(filter);
+    return NULL;
+}
+

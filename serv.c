@@ -387,6 +387,54 @@ int callback_static(const struct _u_request *request,
     return U_CALLBACK_COMPLETE;
 }
 
+struct inv_bloom_t *
+download_inv_bloom(char *host, int k, int N) {
+    struct _u_request  req;
+    struct _u_response resp;
+    struct inv_bloom_t *filt;
+
+    char full_url[1024];
+
+    filt = NULL;
+
+    if (ulfius_init_request(&req) != U_OK) return NULL;
+    if (ulfius_init_response(&resp) != U_OK) goto error_req;
+
+    snprintf(full_url, 1024, "%s/ibf/%d/%d", host, k, N);
+
+    printf("Attempting to download the ibf @ %s\n", host);
+    printf("Requesting URL %s\n", full_url);
+
+    req.http_protocol = strdup("1.0");
+    req.http_verb = strdup("GET");
+    req.http_url = strdup(full_url);
+    if (U_OK != ulfius_send_http_request(&req, &resp)) goto error_req;
+
+    printf("Request completed with status %ld\n", resp.status);
+    /*printf("Raw response text:\n%s\n", resp.binary_body);*/
+
+    filt = ibf_from_string(resp.binary_body);
+    if (!filt) goto error_resp;
+
+    if (!ibf_match(filt, k, N)) goto error_filt;
+
+    printf("Returned filter contains %ld elements.\n",
+            ibf_count(filt));
+
+/*success:*/
+    ulfius_clean_request(&req);
+    ulfius_clean_response(&resp);
+    return filt;
+
+error_filt:
+    ibf_free(filt);
+error_resp:
+    ulfius_clean_response(&resp);
+error_req:
+    ulfius_clean_request(&req);
+    return NULL;
+}
+
 struct serv_state_t *
 start_server(short port, char *root, struct keydb_t *db, struct inv_bloom_t **ibfs,
         struct strata_estimator_t **strata) {
