@@ -2,6 +2,8 @@
 #include "key.h"
 #include "ibf.h"
 #include "setdiff.h"
+#include "types.h"
+#include "serv.h"
 #include "util.h"
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +12,7 @@
 #include <string.h>
 #include <db.h>
 #include <assert.h>
+#include <errno.h>
 
 struct key_idx_t {
     int version;
@@ -26,8 +29,50 @@ struct keydb_t {
     struct key_idx_t *key_idx;
     int idx_alloc;
     int idx_count;
+    struct inv_bloom_t *filters[BLOOM_MAX_COUNT];
+    struct strata_estimator_t *strata[STRATA_MAX_COUNT];
     pthread_rwlock_t lock;
 };
+
+int
+retry_rdlock(struct keydb_t *db) {
+    while (pthread_rwlock_rdlock(&db->lock)) {
+        if (errno != EAGAIN)
+            return -1;
+        sleep(1);
+    }
+    return 0;
+} 
+
+int
+unlock(struct keydb_t *db) {
+    pthread_rwlock_unlock(&db->lock);
+    return 0;
+}
+
+struct inv_bloom_t *
+get_bloom(struct keydb_t *db, int idx) {
+    if (idx >= BLOOM_MAX_COUNT)
+        return NULL;
+    return db->filters[idx];
+}
+
+struct strata_estimator_t *
+get_strata(struct keydb_t *db, int idx) {
+    if (idx >= STRATA_MAX_COUNT)
+        return NULL;
+    return db->strata[idx];
+}
+
+int
+retry_wrlock(struct keydb_t *db) {
+    while (pthread_rwlock_wrlock(&db->lock)) {
+        if (errno != EAGAIN)
+            return -1;
+        sleep(1);
+    }
+    return 0;
+} 
 
 int
 add_key_to_index(struct keydb_t *db, int version, int size, char *uid,
@@ -47,9 +92,15 @@ add_key_to_index(struct keydb_t *db, int version, int size, char *uid,
     db->key_idx[i].size = size;
     db->key_idx[i].id32 = id32;
     db->key_idx[i].id64 = id64;
-    db->key_idx[i].uid = uid;
+    db->key_idx[i].uid = strdup(uid);
     memcpy(db->key_idx[i].hash, hash, sizeof(fp160));
     memcpy(db->key_idx[i].fp, fp, sizeof(fp160));
+
+    for (i=0; i<BLOOM_MAX_COUNT && db->filters[i]; i++)
+        ibf_insert(db->filters[i], hash);
+    for (i=0; i<STRATA_MAX_COUNT && db->strata[i]; i++)
+        strata_insert(db->strata[i], hash);
+
     return 0;
 }
 
@@ -59,7 +110,7 @@ open_key_db(const char *filename, char create) {
     DBC *curs;
     DBT key, data;
     struct pgp_key_t pgp_key;
-    int flags;
+    int flags, i;
 
     ret = malloc(sizeof(struct keydb_t));
     if (!ret) goto error;
@@ -67,6 +118,11 @@ open_key_db(const char *filename, char create) {
     memset(ret, 0, sizeof(struct keydb_t));
     memset(&key, 0, sizeof(key));
     memset(&data, 0, sizeof(data));
+
+    for (i=0; i<BLOOM_MAX_COUNT; i++)
+        assert(ret->filters[i]=ibf_allocate(BLOOM_HASH, (10<<i)));
+    for (i=0; i<STRATA_MAX_COUNT; i++)
+        assert(ret->strata[i]=strata_allocate(BLOOM_HASH, STRATA_IBF_SIZE, STRATA_IBF_MIN_DEPTH<<i));
 
     if (db_create(&ret->dbp, NULL, 0)) goto error;
 
@@ -76,7 +132,7 @@ open_key_db(const char *filename, char create) {
     if (ret->dbp->open(ret->dbp, NULL, filename, NULL, DB_HASH, flags, 0666))
         goto error;
 
-    if (pthread_rwlock_init(&ret->lock, NULL)) goto error;
+    if (pthread_rwlock_init(&ret->lock, 0)) goto error;
 
     if (ret->dbp->cursor(ret->dbp, NULL, &curs, 0)) goto error;
 
@@ -90,6 +146,8 @@ open_key_db(const char *filename, char create) {
         if (add_key_to_index(ret, pgp_key.version, pgp_key.len,
                     pgp_key.user_id, pgp_key.hash, pgp_key.fp, pgp_key.id32, pgp_key.id64))
             goto error;
+
+        free(pgp_key.user_id);
     }
 
     printf("Index contains %d keys.\n", ret->idx_count);
@@ -101,6 +159,82 @@ error:
         return NULL;
     close_key_db(ret);
     return NULL;
+}
+
+int
+peer_with(struct keydb_t *db, char *srv) {
+    struct strata_estimator_t *strata = NULL;
+    struct inv_bloom_t *filter = NULL;
+    struct pgp_key_t *key = NULL;
+    int i, j, est_diff, ibf_min_size, acc;
+    int count, ret;
+    fp160 hash;
+
+    /* For efficient synchronization, try small strata estimators first. */
+    for (i=0; i<STRATA_MAX_COUNT; i++) {
+        strata = download_strata(srv, BLOOM_HASH, STRATA_IBF_SIZE, STRATA_IBF_MIN_DEPTH<<i);
+        if (!strata) break;
+
+        printf("Downloaded strata estimator %d.\n", i);
+        if (retry_rdlock(db)) goto error;
+        est_diff = strata_estimate_diff(db->strata[i], strata);
+        unlock(db);
+        if (est_diff == -1) { 
+            printf("Estimator too small for useful result.\n");
+            continue;
+        }
+
+        ibf_min_size = est_diff * 3;
+        acc = 10;
+        for (j=0; j<BLOOM_MAX_COUNT; j++) {
+            if (acc >= ibf_min_size)
+                break;
+            acc *= 2;
+        }
+        break;
+    }
+    if (est_diff == -1) goto error;
+
+    printf("Estimated difference is %d keys, looking for ibf >= %d = %d.\n", est_diff, ibf_min_size, acc);
+    filter = download_inv_bloom(srv, BLOOM_HASH, acc);
+    if (!filter) goto error;
+
+    printf("Downloaded filter.\n");
+    count = 0;
+    if (retry_rdlock(db)) goto error;
+    if (!ibf_subtract(filter, db->filters[j])) {
+        unlock(db);
+        printf("Estimated difference from ibf=%ld.\n", ibf_count(filter));
+        while ((ret = ibf_decode(filter, hash))) {
+            if (ret < 0)
+                continue;
+            key = download_key(srv, hash);
+            if (!key)
+                goto error;
+            if (parse_key_metadata(key))
+                continue;
+            insert_key(db, key);
+            count++;
+        }
+        printf("Added %d keys.\n", count);
+        if (ibf_count(filter)) {
+            printf("Undecodeable keys.\n");
+            goto error;
+        }
+    } else {
+        unlock(db);
+        goto error;
+    }
+
+    ibf_free(filter);
+    strata_free(strata);
+    return 0;
+
+error:
+    printf("Error synchronizing.\n");
+    ibf_free(filter);
+    strata_free(strata);
+    return -1;
 }
 
 /* Returns the number of keys found, up to max_results. */
@@ -141,6 +275,7 @@ query_key_db(struct keydb_t *db, const char *query, int max_results,
     }
 
     if (!type) return 0;
+    if (retry_rdlock(db)) return -1;
 
     for (i=0; i<db->idx_count; i++) {
         switch(type) {
@@ -175,12 +310,14 @@ query_key_db(struct keydb_t *db, const char *query, int max_results,
         if (++res_idx >= max_results)
             break;
     }
+    pthread_rwlock_unlock(&db->lock);
     return res_idx;
 }
 
 int
 close_key_db(struct keydb_t *db) {
     int ret, i;
+    if (retry_wrlock(db)) return -1;
     ret = 0;
     if (db->key_idx) {
         for (i=0; i<db->idx_count; i++)
@@ -188,6 +325,10 @@ close_key_db(struct keydb_t *db) {
                 free(db->key_idx[i].uid);
         free(db->key_idx);
     }
+    for(i=0; i<BLOOM_MAX_COUNT && db->filters[i]; i++)
+        ibf_free(db->filters[i]);
+    for(i=0; i<STRATA_MAX_COUNT && db->strata[i]; i++)
+        strata_free(db->strata[i]);
     if (db->dbp->close(db->dbp, 0))
         ret = -1;
     free(db);
@@ -210,14 +351,24 @@ insert_key(struct keydb_t *db, struct pgp_key_t *pgp_key) {
     data.data = pgp_key->data;
     data.size = pgp_key->len;
 
+    if (retry_wrlock(db)) return -1;
     ret = db->dbp->put(db->dbp, NULL, &key, &data, DB_NOOVERWRITE);
 
     if (ret == DB_KEYEXIST)
-        return 0;
+        goto success_lock;
     else if (ret)
-        return -1;
+        goto err_lock;
 
+    if (add_key_to_index(db, pgp_key->version, pgp_key->len, pgp_key->user_id,
+                pgp_key->hash, pgp_key->fp, pgp_key->id32, pgp_key->id64))
+        goto err_lock;
+
+success_lock:
+    unlock(db);
     return 0;
+err_lock:
+    unlock(db);
+    return -1;
 }
 
 int
@@ -251,62 +402,3 @@ retrieve_key(struct keydb_t *db, struct pgp_key_t *pgp_key, fp160 hash) {
     return 0;
 }
 
-int
-db_fill_ibf(struct keydb_t *db, struct inv_bloom_t *filter) {
-    DBC *curs;
-    DB *dbp;
-    DBT key, data;
-    struct pgp_key_t pgp_key;
-    int ret;
-
-    dbp = db->dbp;
-    ret = dbp->cursor(dbp, NULL, &curs, 0);
-    if (ret)
-        return -1;
-
-    memset(&key, 0, sizeof(key));
-    memset(&data, 0, sizeof(data));
-
-    while (!curs->c_get(curs, &key, &data, DB_NEXT)) {
-        pgp_key.data = data.data;
-        pgp_key.len = data.size;
-
-        if (parse_key_metadata(&pgp_key))
-            continue;
-
-        ibf_insert(filter, pgp_key.hash);
-        free(pgp_key.user_id);
-    };
-
-    return 0;
-}
-
-int
-db_fill_strata(struct keydb_t *db, struct strata_estimator_t *estimator) {
-    DBC *curs;
-    DB *dbp;
-    DBT key, data;
-    struct pgp_key_t pgp_key;
-    int ret;
-
-    dbp = db->dbp;
-    ret = dbp->cursor(dbp, NULL, &curs, 0);
-    if (ret)
-        return -1;
-
-    memset(&key, 0, sizeof(key));
-    memset(&data, 0, sizeof(data));
-
-    while (!curs->c_get(curs, &key, &data, DB_NEXT)) {
-        pgp_key.data = data.data;
-        pgp_key.len = data.size;
-
-        if (parse_key_metadata(&pgp_key))
-            continue;
-
-        strata_insert(estimator, pgp_key.hash);
-        free(pgp_key.user_id);
-    };
-
-    return 0;
-}

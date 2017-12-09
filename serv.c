@@ -9,6 +9,7 @@
 
 #include "serv.h"
 #include "key.h"
+#include "keydb.h"
 #include "util.h"
 
 #define PATH_LEN 256
@@ -258,10 +259,10 @@ int callback_hkp_lookup(const struct _u_request *request,
 
 int callback_bloom(const struct _u_request *request,
                    struct _u_response *response,
-                   void *blooms_) {
+                   void *db_) {
     char *resp;
     int size, hcnt;
-    struct inv_bloom_t **blooms = blooms_;
+    struct keydb_t *db = db_;
     int i;
 
     printf("Received ibf request.\n");
@@ -282,9 +283,11 @@ int callback_bloom(const struct _u_request *request,
     printf("\thcnt=%d\n", hcnt);
 
     resp = NULL;
-    for (i=0; blooms[i]; i++) {
-        if(ibf_match(blooms[i], hcnt, size)) {
-            resp = ibf_write(blooms[i]);
+    for (i=0; get_bloom(db, i); i++) {
+        if(ibf_match(get_bloom(db, i), hcnt, size)) {
+            if (retry_rdlock(db)) goto serv_error;
+            resp = ibf_write(get_bloom(db, i));
+            unlock(db);
             break;
         }
     }
@@ -297,14 +300,16 @@ int callback_bloom(const struct _u_request *request,
     } else {
         return reply_response_status(response, 404, "size/hash count not found");
     }
+serv_error:
+    return reply_response_status(response, 500, "Could not acquire rdlock");
 }
 
 int callback_strata(const struct _u_request *request,
                     struct _u_response *response,
-                    void *strata_) {
+                    void *db_) {
     char *resp;
     int size, hcnt, depth;
-    struct strata_estimator_t **strata = strata_;
+    struct keydb_t *db = db_;
     int i;
 
     printf("Received strata request.\n");
@@ -331,9 +336,11 @@ int callback_strata(const struct _u_request *request,
     printf("\tdepth=%d\n", depth);
 
     resp = NULL;
-    for (i=0; strata[i]; i++) {
-        if(strata_match(strata[i], hcnt, size, depth)) {
-            resp = strata_write(strata[i]);
+    for (i=0; get_strata(db, i); i++) {
+        if(strata_match(get_strata(db, i), hcnt, size, depth)) {
+            if (retry_rdlock(db)) goto serv_error;
+            resp = strata_write(get_strata(db, i));
+            unlock(db);
             break;
         }
     }
@@ -346,6 +353,8 @@ int callback_strata(const struct _u_request *request,
     } else {
         return reply_response_status(response, 404, "size/hash/depth count not found");
     }
+serv_error:
+    return reply_response_status(response, 500, "Could not acquire rdlock");
 }
 
 void free_static_stream(void *fd) {
@@ -403,14 +412,18 @@ download_url(char *url) {
     req.http_protocol = strdup("1.0");
     req.http_verb = strdup("GET");
     req.http_url = strdup(url);
-    if (U_OK != ulfius_send_http_request(&req, &resp)) goto error_req;
+    if (U_OK != ulfius_send_http_request(&req, &resp)) goto error_resp;
 
-    printf("Request completed with status %ld, size %ld\n", resp.status, strlen(resp.binary_body));
+    printf("Request completed with status %ld, size %ld\n", resp.status, resp.binary_body_length);
 
     if (resp.status < 200 || resp.status >= 300)
         goto error_resp;
 
-    ret = strdup(resp.binary_body);
+    ret = malloc(resp.binary_body_length+1);
+    if (!ret) goto error_resp;
+
+    memcpy(ret, resp.binary_body, resp.binary_body_length);
+    ret[resp.binary_body_length] = 0;
 
 /*success:*/
     ulfius_clean_request(&req);
@@ -500,9 +513,6 @@ download_inv_bloom(char *host, int k, int N) {
 
     if (!ibf_match(filt, k, N)) goto error_filt;
 
-    printf("Returned filter contains %ld elements.\n",
-            ibf_count(filt));
-
 /*success:*/
     free(string);
     return filt;
@@ -515,8 +525,7 @@ error_string:
 }
 
 struct serv_state_t *
-start_server(short port, char *root, struct keydb_t *db, struct inv_bloom_t **ibfs,
-        struct strata_estimator_t **strata) {
+start_server(short port, char *root, struct keydb_t *db) {
     struct serv_state_t *serv;
 
     if (!(serv=malloc(sizeof(struct serv_state_t))))
@@ -536,11 +545,11 @@ start_server(short port, char *root, struct keydb_t *db, struct inv_bloom_t **ib
             &callback_static, root);
     /* Add the key upload endpoint. */
     /* Add the difference estimator endpoint. */
-    ulfius_add_endpoint_by_val(&serv->inst, "GET", NULL, "/strata/:depth/:hcnt/:size", 0,
-            &callback_strata, strata);
+    ulfius_add_endpoint_by_val(&serv->inst, "GET", NULL, 
+            "/strata/:depth/:hcnt/:size", 0, &callback_strata, db);
     /* Add the bloom filter endpoint. */
-    ulfius_add_endpoint_by_val(&serv->inst, "GET", NULL, "/ibf/:hcnt/:size", 0,
-            &callback_bloom, ibfs);
+    ulfius_add_endpoint_by_val(&serv->inst, "GET", NULL, 
+            "/ibf/:hcnt/:size", 0, &callback_bloom, db);
     /* Add the system status endpoint. */
 
     /* Start the server. */

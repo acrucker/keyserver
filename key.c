@@ -14,6 +14,30 @@
 #define START_ASCII "-----BEGIN PGP PUBLIC KEY BLOCK-----"
 #define END_ASCII "-----END PGP PUBLIC KEY BLOCK-----"
 
+struct pgp_key_t *
+alloc_key() {
+    struct pgp_key_t *ret;
+    ret = malloc(sizeof(*ret));
+    if (!ret) return NULL;
+
+    memset(ret, 0, sizeof(*ret));
+    return ret;
+}
+
+void
+inner_free_key(struct pgp_key_t *key) {
+    if (!key) return;
+    if (key->user_id) free(key->user_id);
+    if (key->data) free(key->data);
+    memset(key, 0, sizeof(*key));
+}
+
+void
+deep_free_key(struct pgp_key_t *key) {
+    inner_free_key(key);
+    free(key);
+}
+
 uint64_t
 rd_n_bytes(FILE *in, int n) {
     uint8_t tmp;
@@ -216,10 +240,16 @@ parse_key_metadata(struct pgp_key_t *key) {
             break;
     }
 
+    if (!key->user_id)
+        key->user_id = strdup("");
+
+    if (!key->user_id)
+        goto error;
+
+    key->analyzed = 1;
     return 0;
 error:
-    if (key->user_id)
-        free(key->user_id);
+    free(key->user_id);
     return -1;
 }
 
@@ -277,16 +307,15 @@ parse_from_dump(FILE *in, struct pgp_key_t *key) {
     key->len = end_pos-start_pos;
     key->data = malloc(key->len);
     if (!key->data)
-        return -1;
+        goto error;
 
-    if (key->len != fread(key->data, 1, key->len, in)) {
-        key->len = 0;
-        free(key->data);
-        key->data = NULL;
-        return -1;
-    }
+    if (key->len != fread(key->data, 1, key->len, in))
+        goto error;
 
     return 0;
+error:
+    inner_free_key(key);
+    return -1;
 }
 
 void

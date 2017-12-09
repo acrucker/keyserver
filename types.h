@@ -5,9 +5,12 @@
 #include <stdlib.h>
 
 #define BLOOM_HASH 4
-#define STRATA_IBF_SIZE 40
-#define STRATA_IBF_DEPTH 16
+#define IBF_MIN_SIZE 10
 
+#define STRATA_IBF_SIZE 40
+#define STRATA_IBF_MIN_DEPTH 4
+
+#define STRATA_MAX_COUNT 4
 #define BLOOM_MAX_COUNT 12
 
 struct inv_bloom_t;
@@ -15,6 +18,7 @@ struct keydb_t;
 typedef uint8_t fp160[20];
 
 struct pgp_key_t {
+    char analyzed;
     size_t len;
     int version;
     uint8_t *data;

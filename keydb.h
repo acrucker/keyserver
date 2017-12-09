@@ -16,15 +16,27 @@ int
 close_key_db(struct keydb_t *db);
 
 int
+peer_with(struct keydb_t *db, char *srv);
+
+int 
+retry_rdlock(struct keydb_t *db);
+
+int 
+retry_wrlock(struct keydb_t *db);
+
+int 
+unlock(struct keydb_t *db);
+
+struct inv_bloom_t *
+get_bloom(struct keydb_t *db, int idx);
+
+struct strata_estimator_t *
+get_strata(struct keydb_t *db, int idx);
+
+int
 insert_key(struct keydb_t *db, struct pgp_key_t *key);
 
 int
 retrieve_key(struct keydb_t *db, struct pgp_key_t *key, fp160 keyid);
-
-int
-db_fill_ibf(struct keydb_t *db, struct inv_bloom_t *filter);
-
-int
-db_fill_strata(struct keydb_t *db, struct strata_estimator_t *estimator);
 
 #endif

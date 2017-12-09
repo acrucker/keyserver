@@ -4,6 +4,15 @@
 #include "types.h"
 #include <stdio.h>
 
+struct pgp_key_t *
+alloc_key();
+
+void
+free_key(struct pgp_key_t *key);
+
+void
+inner_free_key(struct pgp_key_t *key);
+
 /* Attempts to parse a public key from a file dump. Returns 0 on success and
  * non-zero on failure. On a successful return, the value pointed to by key is 
  * filled in with the results. */
