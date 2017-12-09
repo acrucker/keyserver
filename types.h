@@ -11,7 +11,7 @@
 #define STRATA_IBF_MIN_DEPTH 4
 
 #define STRATA_MAX_COUNT 4
-#define BLOOM_MAX_COUNT 12
+#define BLOOM_MAX_COUNT 16
 
 struct inv_bloom_t;
 struct keydb_t;

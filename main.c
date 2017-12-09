@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <time.h>
+#include <signal.h>
 #include "hash.h"
 #include "ibf.h"
 #include "types.h"
@@ -11,44 +12,83 @@
 #include "keydb.h"
 #include "serv.h"
 
+#define MAX_PEERS 256
+
+char done = 0;
+char do_poll = 1;
+
+struct peer_t {
+    char host[1024];
+    int interval;
+    int countdown;
+    int status;
+};
+
+void
+handle_sig(int sig) {
+    if (sig == SIGTERM) {
+        done = 1;
+    } else if (sig == SIGALRM) {
+        do_poll = 1;
+    }
+} 
+
 int main(int argc, char **argv) {
-    FILE *in;
-    char *db_name;
-    char *serv_root;
-    char *peer_srv;
+    char *hosts_file = "hosts.txt";
+    FILE *hosts_in = NULL;
+    char *db_name = "test.db";
+    char *serv_root = "static";
+
+    struct peer_t peers[MAX_PEERS];
     char verbose, create, ingest;
-    struct pgp_key_t key;
     struct keydb_t *db;
     struct serv_state_t *serv;
-    uint64_t total;
-    int read;
     int opt;
     int i;
-    int port;
-    float excl_pct;
+    int port = 8080;
+    unsigned alarm_int = 15;
+    float excl_pct = 0;;
 
-    read = total = 0;
     verbose = create = ingest = 0;
-    port = 8080;
-    db_name = "test.db";
-    serv_root = "static";
-    peer_srv = NULL;
-    excl_pct = 0.0;
 
-    while ((opt = getopt(argc, argv, "cp:d:ivr:e:g:")) != -1) {
+    while ((opt = getopt(argc, argv, "a:cd:e:h:ip:r:v")) != -1) {
         switch (opt) {
             default:
-            case '?': return -1;               break;
-            case 'd': db_name = optarg;        break;
-            case 'p': port = atoi(optarg);     break;
-            case 'c': create = 1;              break;
-            case 'i': ingest = 1;              break;
-            case 'v': verbose = 1;             break;
-            case 'r': serv_root = optarg;      break;
-            case 'e': excl_pct = atof(optarg); break;
-            case 'g': peer_srv = optarg;       break;
+            case '?': return -1;                break;
+            case 'a': alarm_int = atoi(optarg); break;
+            case 'c': create = 1;               break;
+            case 'd': db_name = optarg;         break;
+            case 'e': excl_pct = atof(optarg);  break;
+            case 'h': hosts_file = optarg;      break;
+            case 'i': ingest = 1;               break;
+            case 'p': port = atoi(optarg);      break;
+            case 'r': serv_root = optarg;       break;
+            case 'v': verbose = 1;              break;
         }
     }
+
+    hosts_in = fopen(hosts_file, "r");
+    if (!hosts_in) {
+        printf("Unable to open hosts file %s.\n", hosts_file);
+        return -1;
+    }
+
+    for (i=0; i<MAX_PEERS; i++) {
+        if (2 != fscanf(hosts_in, "%d %1024[^ \r\n\t\v\f]", &peers[i].interval, peers[i].host)) {
+            peers[i].interval = 0;
+            break;
+        } else if (peers[i].interval == 0) {
+            /* Skip invalid interval. */
+            i--;
+        }
+    }
+    printf("Read %d hosts from file:\n", i);
+    for (i=0; i<MAX_PEERS; i++) {
+        if (peers[i].interval == 0)
+            break;
+        printf("%d %s\n", peers[i].interval, peers[i].host);
+    }
+
 
     db = open_key_db(db_name, create);
     if (!db) {
@@ -59,45 +99,39 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    if (peer_srv) {
-        peer_with(db, peer_srv);
-    } else if (ingest) {
-        printf("Randomly excluding %8.4f%% of keys.\n", excl_pct);
-        srand48(time(NULL));
-        for (i=optind; i<argc; i++) {
-            in = fopen(argv[i], "rb");
-            if (!in) {
-                fprintf(stderr, "Could not open dump file %s\n", argv[1]);
-                exit(1);
-            }
-            
-            while (!parse_from_dump(in, &key)) {
-                if (parse_key_metadata(&key))
-                    continue;
-                if (100*drand48() < excl_pct)
-                    continue;
-                if(insert_key(db, &key))
-                    return -1;
-                total += key.len;
-                free(key.data);
-                free(key.user_id);
-                read++;
-            }
-            if (read %10000 == 0)
-                printf("Ingesting...%d\n", read);
-
-            fclose(in);
-        }
-        printf("Read %d keys (total %6.2f MiB).\n", read, total/1024.0/1024.0);
+    if (ingest) {
+        for (i=optind; i<argc; i++)
+            if (ingest_file(db, argv[i], excl_pct)) return -1;
     } else {
+        signal(SIGTERM, &handle_sig);
+        signal(SIGALRM, &handle_sig);
+        alarm(alarm_int);
         printf("Starting in server mode on port %d.\n", port);
         assert(serv=start_server(port, serv_root, db));
-        getc(stdin);
+        while (pause()) {
+            if (done) break;
+            if (do_poll) {
+                do_poll = 0;
+                for (i=0; i<MAX_PEERS; i++) {
+                    if (!peers[i].interval)
+                        break;
+                    peers[i].countdown -= alarm_int;
+                    if (peers[i].countdown <= 0) {
+                        printf("Polling %s.\n", peers[i].host);
+                        peers[i].countdown = peers[i].interval;
+                        peers[i].status = peer_with(db, peers[i].host);
+                    }
+                }
+            }
+        }
+        printf("Received SIGTERM, terminating.\n");
         stop_server(serv);
     }
 
-    if (close_key_db(db))
+    if (close_key_db(db)) {
+        printf("Error closing database.\n");
         return -1;
+    }
 
     return 0;
 }

@@ -162,6 +162,44 @@ error:
 }
 
 int
+ingest_file(struct keydb_t *db, const char *filename, float excl_pct) {
+    FILE *in;
+    struct pgp_key_t key;
+    int read, total;
+
+    read = total = 0;
+
+    printf("Randomly excluding %8.4f%% of keys.\n", excl_pct);
+    srand48(time(NULL));
+
+    in = fopen(filename, "rb");
+    if (!in) {
+        fprintf(stderr, "Could not open dump file %s\n", filename);
+        return -1;
+    }
+    
+    while (!parse_from_dump(in, &key)) {
+        if (parse_key_metadata(&key))
+            continue;
+        if (100*drand48() < excl_pct)
+            continue;
+        if(insert_key(db, &key))
+            return -1;
+        total += key.len;
+        free(key.data);
+        free(key.user_id);
+        read++;
+    }
+    if (read %10000 == 0)
+        printf("Ingesting...%d\n", read);
+
+    fclose(in);
+    printf("Read %d keys (total %6.2f MiB) from %s\n", read, total/1024.0/1024.0, filename);
+    return 0;
+}
+
+
+int
 peer_with(struct keydb_t *db, char *srv) {
     struct strata_estimator_t *strata = NULL;
     struct inv_bloom_t *filter = NULL;

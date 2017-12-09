@@ -13,6 +13,9 @@ query_key_db(struct keydb_t *db, const char *query, int max_results,
         struct pgp_key_t *keys, char exact, int after);
 
 int
+ingest_file(struct keydb_t *db, const char *filename, float excl_pct);
+
+int
 close_key_db(struct keydb_t *db);
 
 int
