@@ -30,4 +30,7 @@ strata_estimate_diff(const struct strata_estimator_t *estimator_A,
 char *
 strata_write(const struct strata_estimator_t *estimator);
 
+struct strata_estimator_t *
+strata_from_string(char *string);
+
 #endif

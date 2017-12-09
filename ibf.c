@@ -172,7 +172,7 @@ ibf_decode(struct inv_bloom_t *filter /* Filter to search */,
 
         /* Check that both the hash and value match to the defined precision. */
         SHA1(filter->id_sums[i], 20, hash_val);
-        if (neq_fp160(filter->id_sums[i], hash_val))
+        if (neq_fp160(filter->hash_sums[i], hash_val))
             continue;
 
         memcpy(&element[0], &filter->id_sums[i], 20);
@@ -219,7 +219,7 @@ ibf_count(struct inv_bloom_t *filter) {
     }
 
     /* The count of total added hashes should be divisible by k */
-    assert(count%filter->k == 0);
+    //assert((count%(filter->k)) == 0);
     count /= filter->k;
 
     return count;
@@ -229,23 +229,21 @@ ibf_count(struct inv_bloom_t *filter) {
 char *
 ibf_write(struct inv_bloom_t *filter) {
     char *buf;
-    int i, j;
+    int i;
     int w;
+
+    char buf_hashA[41], buf_hashB[41];
 
     w = 0;
     buf = malloc(100*filter->N);
     if (!buf) return NULL;
 
     assert(filter);
-    w += sprintf(buf+w, "1:%d:%lu\n", filter->k, filter->N);
+    w += sprintf(buf+w, "IBF:%d:%lu\n", filter->k, filter->N);
     for (i=0; i<filter->N; i++) {
-        w += sprintf(buf+w, "%d:", filter->counts[i]);
-        for(j=0; j<20; j++)
-            w += sprintf(buf+w, "%02X", (filter->id_sums[i])[j]);
-        w += sprintf(buf+w, ":");
-        for(j=0; j<20; j++)
-            w += sprintf(buf+w, "%02X", (filter->hash_sums[i])[j]);
-        w += sprintf(buf+w, "\n");
+        print_fp160(filter->id_sums[i], buf_hashA);
+        print_fp160(filter->hash_sums[i], buf_hashB);
+        w += sprintf(buf+w, "%d:%s:%s\n", filter->counts[i], buf_hashA, buf_hashB);
     }
     return buf;
 }
@@ -253,15 +251,12 @@ ibf_write(struct inv_bloom_t *filter) {
 struct inv_bloom_t *
 ibf_from_string(char *string) {
     int k, N, i, cnt;
-    char *sptr, *line;
     struct inv_bloom_t *filter;
     char bufA[40], bufB[40];
     fp160 buf;
 
     filter = NULL;
-    line = strtok_r(string, "\r\n", &sptr);
-    if (!line) goto error;
-    if (2 != sscanf(line, "1:%d:%d", &k, &N))
+    if (2 != sscanf(string, "IBF:%d:%d", &k, &N))
         goto error;
 
     /*printf("Detected k=%d, N=%d\n", k, N);*/
@@ -269,9 +264,9 @@ ibf_from_string(char *string) {
     filter = ibf_allocate(k, N);
 
     for (i=0; i<N; i++) {
-        line = strtok_r(NULL, "\r\n", &sptr);
-        if (!line) goto error;
-        if (3 != sscanf(line, "%d:%40c:%40c", &cnt, bufA, bufB)) goto error;
+        string += strcspn(string, "\r\n");
+        string += strspn(string, "\r\n");
+        if (3 != sscanf(string, "%d:%40c:%40c", &cnt, bufA, bufB)) goto error;
 
         filter->counts[i] = cnt;
         parse_fp160(bufA, buf);

@@ -4,6 +4,12 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#define BLOOM_HASH 4
+#define STRATA_IBF_SIZE 40
+#define STRATA_IBF_DEPTH 16
+
+#define BLOOM_MAX_COUNT 12
+
 struct inv_bloom_t;
 struct keydb_t;
 typedef uint8_t fp160[20];

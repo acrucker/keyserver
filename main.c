@@ -20,6 +20,7 @@ int main(int argc, char **argv) {
     char *tmp;
     char verbose, create, ingest;
     struct pgp_key_t key;
+    struct pgp_key_t *down_key;
     struct keydb_t *db;
     struct serv_state_t *serv;
     uint64_t total;
@@ -29,16 +30,17 @@ int main(int argc, char **argv) {
     int port;
     int acc;
     float excl_pct;
+    fp160 hash;
 
     struct pgp_key_t res_keys[16];
     int results;
+    int est_diff;
+    int ibf_min_size;
 
     struct inv_bloom_t *filters[16];
     struct inv_bloom_t *filter_down;
-    struct strata_estimator_t *strata[2];
-
-    assert(strata[0]=strata_allocate(2, 10, 64));
-    strata[1] = NULL;
+    struct strata_estimator_t *strata_down;
+    struct strata_estimator_t *strata[16];
 
     read = total = 0;
     verbose = create = ingest = 0;
@@ -69,21 +71,45 @@ int main(int argc, char **argv) {
     if (!db)
         return -1;
     acc = 10;
-    for (i=0; i<7; i++) {
-        assert(filters[i]=ibf_allocate(3, acc));
+    for (i=0; i<BLOOM_MAX_COUNT; i++) {
+        assert(filters[i]=ibf_allocate(BLOOM_HASH, acc));
         assert(!db_fill_ibf(db, filters[i]));
         acc *= 2;
     }
     filters[i] = 0;
-    printf("Filling strata from database.\n");
+    assert(strata[0]=strata_allocate(BLOOM_HASH, STRATA_IBF_SIZE, STRATA_IBF_DEPTH));
+    strata[1] = NULL;
+    printf("Filling strata from database:\n");
     assert(!db_fill_strata(db, strata[0]));
-    /*strata_counts(strata);*/
 
     if (peer_srv) {
-        if ((filter_down = download_inv_bloom(peer_srv, 3, 20))) {
-            printf("Downloaded filter.\n");
-        } else { 
-            printf("Failed to download filter.\n");
+        if ((strata_down = download_strata(peer_srv, BLOOM_HASH, STRATA_IBF_SIZE, STRATA_IBF_DEPTH))) {
+            printf("Downloaded strata estimator:\n");
+            est_diff = strata_estimate_diff(strata[0], strata_down);
+            ibf_min_size = est_diff * 3;
+            acc = 10;
+            for (i=0; i<BLOOM_MAX_COUNT; i++) {
+                if (acc >= ibf_min_size)
+                    break;
+                acc *= 2;
+            }
+            printf("Estimated difference is %d keys, looking for ibf >= %d = %d.\n", est_diff, ibf_min_size, acc);
+            if ((filter_down = download_inv_bloom(peer_srv, BLOOM_HASH, acc))) {
+                printf("Downloaded filter.\n");
+                if (!ibf_subtract(filter_down, filters[i])) {
+                    while (ibf_decode(filter_down, hash)) {
+                        down_key = download_key(peer_srv, hash);
+                        if (!down_key)
+                            continue;
+                        parse_key_metadata(down_key);
+                        insert_key(db, down_key);
+                    }
+                }
+                ibf_free(filter_down);
+            } else { 
+                printf("Failed to download filter.\n");
+            }
+            strata_free(strata_down);
         }
     } else if (query) {
         results = query_key_db(db, query, 16, res_keys, 0, 0);
@@ -115,10 +141,10 @@ int main(int argc, char **argv) {
             while (!parse_from_dump(in, &key)) {
                 if (parse_key_metadata(&key))
                     continue;
-                if(insert_key(db, &key))
-                    return -1;
                 if (100*drand48() < excl_pct)
                     continue;
+                if(insert_key(db, &key))
+                    return -1;
                 total += key.len;
                 free(key.data);
                 free(key.user_id);

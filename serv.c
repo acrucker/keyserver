@@ -387,34 +387,116 @@ int callback_static(const struct _u_request *request,
     return U_CALLBACK_COMPLETE;
 }
 
-struct inv_bloom_t *
-download_inv_bloom(char *host, int k, int N) {
+char *
+download_url(char *url) {
     struct _u_request  req;
     struct _u_response resp;
-    struct inv_bloom_t *filt;
+    char *ret;
 
-    char full_url[1024];
-
-    filt = NULL;
+    ret = NULL;
 
     if (ulfius_init_request(&req) != U_OK) return NULL;
     if (ulfius_init_response(&resp) != U_OK) goto error_req;
 
-    snprintf(full_url, 1024, "%s/ibf/%d/%d", host, k, N);
-
-    printf("Attempting to download the ibf @ %s\n", host);
-    printf("Requesting URL %s\n", full_url);
+    printf("Requesting URL %s\n", url);
 
     req.http_protocol = strdup("1.0");
     req.http_verb = strdup("GET");
-    req.http_url = strdup(full_url);
+    req.http_url = strdup(url);
     if (U_OK != ulfius_send_http_request(&req, &resp)) goto error_req;
 
-    printf("Request completed with status %ld\n", resp.status);
-    /*printf("Raw response text:\n%s\n", resp.binary_body);*/
+    printf("Request completed with status %ld, size %ld\n", resp.status, strlen(resp.binary_body));
 
-    filt = ibf_from_string(resp.binary_body);
-    if (!filt) goto error_resp;
+    if (resp.status < 200 || resp.status >= 300)
+        goto error_resp;
+
+    ret = strdup(resp.binary_body);
+
+/*success:*/
+    ulfius_clean_request(&req);
+    ulfius_clean_response(&resp);
+    return ret;
+
+error_resp:
+    ulfius_clean_response(&resp);
+error_req:
+    ulfius_clean_request(&req);
+    return NULL;
+}
+
+struct pgp_key_t *
+download_key(char *srv, fp160 hash) {
+    struct pgp_key_t *ret = NULL;
+    char *string = NULL;
+    char hash_buf[41];
+    char url_buf[1024];
+
+    ret = malloc(sizeof(*ret));
+    if (!ret) goto error;
+
+    print_fp160(hash, hash_buf);
+    printf("Attempting to get key %s from %s.\n", hash_buf, srv);
+    snprintf(url_buf, 1024, "%s/pks/lookup?op=download&search=%s", 
+            srv, hash_buf);
+
+    string = download_url(url_buf);
+
+    if (ascii_parse_key(string, ret))
+        goto error;
+
+    free(string);
+    return ret;
+
+error:
+    free(string);
+    free(ret);
+    return NULL;
+}
+
+struct strata_estimator_t *
+download_strata(char *host, int k, int N, int c) {
+    char *string = NULL;
+    struct strata_estimator_t *estimator = NULL;
+
+    char full_url[1024];
+    snprintf(full_url, 1024, "%s/strata/%d/%d/%d", host, c, k, N);
+
+    printf("Attempting to download the strata estimator (c=%d, k=%d, N=%d) @ %s\n", c, k, N, host);
+
+    string = download_url(full_url);
+    if (!string) return NULL;
+
+    estimator = strata_from_string(string);
+    if (!estimator) goto error_string;
+
+    if (!strata_match(estimator, k, N, c)) goto error_est;
+
+/*success:*/
+    free(string);
+    return estimator;
+
+error_est:
+    strata_free(estimator);
+error_string:
+    free(string);
+    return NULL;
+}
+
+struct inv_bloom_t *
+download_inv_bloom(char *host, int k, int N) {
+    char *string = NULL;
+    struct inv_bloom_t *filt = NULL;
+
+    char full_url[1024];
+    snprintf(full_url, 1024, "%s/ibf/%d/%d", host, k, N);
+
+    printf("Attempting to download the ibf (k=%d, N=%d) @ %s\n", k, N, host);
+
+    string = download_url(full_url);
+    if (!string) return NULL;
+
+    filt = ibf_from_string(string);
+    if (!filt) goto error_string;
 
     if (!ibf_match(filt, k, N)) goto error_filt;
 
@@ -422,16 +504,13 @@ download_inv_bloom(char *host, int k, int N) {
             ibf_count(filt));
 
 /*success:*/
-    ulfius_clean_request(&req);
-    ulfius_clean_response(&resp);
+    free(string);
     return filt;
 
 error_filt:
     ibf_free(filt);
-error_resp:
-    ulfius_clean_response(&resp);
-error_req:
-    ulfius_clean_request(&req);
+error_string:
+    free(string);
     return NULL;
 }
 
