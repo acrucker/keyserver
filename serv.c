@@ -33,6 +33,8 @@ int reply_response_status(struct _u_response *response,
         case 403: expl   = "Invalid path";          break;
         case 404: expl   = "File not found";        break;
         case 302: expl   = "Redirecting";           break;
+        case 200: expl   = "Successful";            break;
+        case 201: expl   = "Resource created";      break;
     }
     snprintf(buf, BUF_SIZE, "%s: %s", expl, desc?desc:"");
     printf("Replying with code %d (%s)\n", status, buf);
@@ -59,6 +61,13 @@ callback_static_stream(void *fd, uint64_t offset, char *out_buf, size_t max) {
         return bytes_read;
     }
 }
+/*
+char *
+url_decode_string(char *string) {
+    char *ret;
+    ret = malloc(strlen(string)+1);
+    if (!ret) return NULL;
+    while */
 
 int
 html_escape_string_UTF8(char *out_buf, size_t out_size, char *in_buf) {
@@ -396,6 +405,54 @@ int callback_static(const struct _u_request *request,
     return U_CALLBACK_COMPLETE;
 }
 
+int callback_add_key(const struct _u_request *request,
+                     struct _u_response *response,
+                     void *db_) {
+    struct keydb_t *db = db_;
+    struct pgp_key_t key;
+    struct pgp_key_t test_key;
+    char creat_buf[1024];
+    char hash_buf[41];
+    const char *keytext;
+    
+    printf("Received request to add key.\n");
+    
+    if (!u_map_has_key(request->map_post_body, "keytext"))
+        return reply_response_status(response, 400, "Malformed request");
+    
+    keytext = u_map_get(request->map_post_body, "keytext");
+
+    printf("Raw received keytext: \n%s\n", keytext);
+    
+    if (ascii_parse_key(keytext, &key))
+        return reply_response_status(response, 400, "Malformed key");
+    
+    if (parse_key_metadata(&key)) {
+        free(key.data);
+        return reply_response_status(response, 400, "Malformed key");
+    }
+    
+    if (retrieve_key(db, &test_key, key.hash)) {
+        inner_free_key(&test_key);
+        inner_free_key(&key);
+        return reply_response_status(response, 403, "Cannot overwrite key.");
+    }
+    inner_free_key(&test_key);
+
+    if (insert_key(db, &key, 1)) {
+        inner_free_key(&key);
+        return reply_response_status(response, 500, "Failed to insert key");
+    }
+
+    print_fp160(key.hash, hash_buf);
+    snprintf(creat_buf, 1024, "Location: /pks/lookup?op=download&hash=%s", hash_buf);
+
+    ulfius_add_header_to_response(response, "Location:", creat_buf);
+    return reply_response_status(response, 201, hash_buf);
+
+}
+
+
 char *
 download_url(char *url) {
     struct _u_request  req;
@@ -544,6 +601,8 @@ start_server(short port, char *root, struct keydb_t *db) {
     ulfius_add_endpoint_by_val(&serv->inst, "GET", NULL, "/*", 100,
             &callback_static, root);
     /* Add the key upload endpoint. */
+    ulfius_add_endpoint_by_val(&serv->inst, "POST", NULL, "/pks/add", 0,
+            &callback_add_key, db);
     /* Add the difference estimator endpoint. */
     ulfius_add_endpoint_by_val(&serv->inst, "GET", NULL, 
             "/strata/:depth/:hcnt/:size", 0, &callback_strata, db);

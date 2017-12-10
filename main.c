@@ -26,7 +26,7 @@ struct peer_t {
 
 void
 handle_sig(int sig) {
-    if (sig == SIGTERM) {
+    if (sig == SIGTERM || sig == SIGINT) {
         done = 1;
     } else if (sig == SIGALRM) {
         do_poll = 1;
@@ -51,7 +51,7 @@ int main(int argc, char **argv) {
 
     verbose = create = ingest = 0;
 
-    while ((opt = getopt(argc, argv, "a:cd:e:h:ip:r:v")) != -1) {
+    while ((opt = getopt(argc, argv, "a:cd:e:h:ip:qr:v")) != -1) {
         switch (opt) {
             default:
             case '?': return -1;                break;
@@ -90,7 +90,7 @@ int main(int argc, char **argv) {
     }
 
 
-    db = open_key_db(db_name, create);
+    db = open_key_db(db_name, create, ingest?0:1);
     if (!db) {
         if (create)
             printf("Unable to open/create database %s\n", db_name);
@@ -100,14 +100,20 @@ int main(int argc, char **argv) {
     }
 
     if (ingest) {
-        for (i=optind; i<argc; i++)
-            if (ingest_file(db, argv[i], excl_pct)) return -1;
+        for (i=optind; i<argc; i++) {
+            if (ingest_file(db, argv[i], excl_pct))  {
+                printf("Error ingesting file %s\n", argv[i]);
+                return -1;
+            }
+        }
     } else {
+        signal(SIGINT, &handle_sig);
         signal(SIGTERM, &handle_sig);
         signal(SIGALRM, &handle_sig);
         alarm(alarm_int);
         printf("Starting in server mode on port %d.\n", port);
-        assert(serv=start_server(port, serv_root, db));
+        if (!(serv=start_server(port, serv_root, db)) )
+            goto error_serv;
         while (pause()) {
             if (done) break;
             if (do_poll) {
@@ -124,10 +130,11 @@ int main(int argc, char **argv) {
                 }
             }
         }
-        printf("Received SIGTERM, terminating.\n");
+        printf("Received signal, terminating.\n");
         stop_server(serv);
     }
-
+error_serv:
+    printf("Closing database.\n");
     if (close_key_db(db)) {
         printf("Error closing database.\n");
         return -1;

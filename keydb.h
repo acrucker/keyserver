@@ -1,12 +1,13 @@
 #ifndef KEYDB_H_
 #define KEYDB_H_
 
+#include <db.h>
 #include "types.h"
 #include "ibf.h"
 #include "setdiff.h"
 
 struct keydb_t *
-open_key_db(const char *filename, char create);
+open_key_db(const char *filename, char create, char index);
 
 int
 query_key_db(struct keydb_t *db, const char *query, int max_results,
@@ -37,7 +38,7 @@ struct strata_estimator_t *
 get_strata(struct keydb_t *db, int idx);
 
 int
-insert_key(struct keydb_t *db, struct pgp_key_t *key);
+insert_key(struct keydb_t *db, struct pgp_key_t *pgp_key, int index);
 
 int
 retrieve_key(struct keydb_t *db, struct pgp_key_t *key, fp160 keyid);

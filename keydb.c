@@ -13,6 +13,7 @@
 #include <db.h>
 #include <assert.h>
 #include <errno.h>
+/*#include <valgrind/memcheck.h>*/
 
 struct key_idx_t {
     int version;
@@ -96,21 +97,24 @@ add_key_to_index(struct keydb_t *db, int version, int size, char *uid,
     memcpy(db->key_idx[i].hash, hash, sizeof(fp160));
     memcpy(db->key_idx[i].fp, fp, sizeof(fp160));
 
+#if 0
     for (i=0; i<BLOOM_MAX_COUNT && db->filters[i]; i++)
         ibf_insert(db->filters[i], hash);
     for (i=0; i<STRATA_MAX_COUNT && db->strata[i]; i++)
         strata_insert(db->strata[i], hash);
+#endif
 
     return 0;
 }
 
 struct keydb_t *
-open_key_db(const char *filename, char create) {
+open_key_db(const char *filename, char create, char index) {
     struct keydb_t *ret;
     DBC *curs;
     DBT key, data;
     struct pgp_key_t pgp_key;
     int flags, i;
+    int indexed;
 
     ret = malloc(sizeof(struct keydb_t));
     if (!ret) goto error;
@@ -119,42 +123,53 @@ open_key_db(const char *filename, char create) {
     memset(&key, 0, sizeof(key));
     memset(&data, 0, sizeof(data));
 
+    data.flags = DB_DBT_REALLOC;
+
     for (i=0; i<BLOOM_MAX_COUNT; i++)
         assert(ret->filters[i]=ibf_allocate(BLOOM_HASH, (10<<i)));
     for (i=0; i<STRATA_MAX_COUNT; i++)
         assert(ret->strata[i]=strata_allocate(BLOOM_HASH, STRATA_IBF_SIZE, STRATA_IBF_MIN_DEPTH<<i));
 
-    if (db_create(&ret->dbp, NULL, 0)) goto error;
-
     if (create) flags = DB_CREATE;
     else        flags = 0;
+
+    if (db_create(&ret->dbp, NULL, 0)) goto error;
 
     if (ret->dbp->open(ret->dbp, NULL, filename, NULL, DB_HASH, flags, 0666))
         goto error;
 
     if (pthread_rwlock_init(&ret->lock, 0)) goto error;
 
-    if (ret->dbp->cursor(ret->dbp, NULL, &curs, 0)) goto error;
+    if (index) {
+        if (ret->dbp->cursor(ret->dbp, NULL, &curs, 0)) goto error;
+    
+        indexed = 0;
+        while (!curs->c_get(curs, &key, &data, DB_NEXT)) {
+            pgp_key.data = data.data;
+            pgp_key.len = data.size;
 
-    while (!curs->c_get(curs, &key, &data, DB_NEXT)) {
-        pgp_key.data = data.data;
-        pgp_key.len = data.size;
+            if (parse_key_metadata(&pgp_key))
+                continue;
 
-        if (parse_key_metadata(&pgp_key))
-            continue;
+            if (add_key_to_index(ret, pgp_key.version, pgp_key.len,
+                        pgp_key.user_id, pgp_key.hash, pgp_key.fp, pgp_key.id32, pgp_key.id64))
+                goto error;
 
-        if (add_key_to_index(ret, pgp_key.version, pgp_key.len,
-                    pgp_key.user_id, pgp_key.hash, pgp_key.fp, pgp_key.id32, pgp_key.id64))
-            goto error;
+            free(pgp_key.user_id);
+            if (++indexed%10000 == 0)
+                printf("Indexing...%d\n", indexed);
 
-        free(pgp_key.user_id);
+        }
+        curs->c_close(curs);
+
+        printf("Index contains %d keys.\n", ret->idx_count);
+        free(data.data);
     }
-
-    printf("Index contains %d keys.\n", ret->idx_count);
 
     return ret;
 
 error:
+    free(data.data);
     if (!ret)
         return NULL;
     close_key_db(ret);
@@ -178,26 +193,41 @@ ingest_file(struct keydb_t *db, const char *filename, float excl_pct) {
         return -1;
     }
     
+    key.user_id = NULL;
     while (!parse_from_dump(in, &key)) {
-        if (parse_key_metadata(&key))
+        if (parse_key_metadata(&key) || 100*drand48() < excl_pct) {
+            free(key.data);
+            free(key.user_id);
+            key.user_id = NULL;
             continue;
-        if (100*drand48() < excl_pct)
-            continue;
-        if(insert_key(db, &key))
-            return -1;
+        }
+        /*if(insert_key(db, &key, 0, db->gtxnid)) {*/
+        if(insert_key(db, &key, 0)) {
+            printf("Failed to insert key.\n");
+            return -1; 
+        }
+
         total += key.len;
         free(key.data);
         free(key.user_id);
+        key.user_id = NULL;
         read++;
+        if (read %10000 == 0)
+            printf("Ingesting...%d\n", read);
     }
-    if (read %10000 == 0)
-        printf("Ingesting...%d\n", read);
 
     fclose(in);
     printf("Read %d keys (total %6.2f MiB) from %s\n", read, total/1024.0/1024.0, filename);
     return 0;
 }
 
+
+uint64_t
+us_timestamp() {
+    struct timespec time;
+    clock_gettime(CLOCK_MONOTONIC, &time);
+    return time.tv_sec*1000000+time.tv_nsec/1000;
+}
 
 int
 peer_with(struct keydb_t *db, char *srv) {
@@ -206,7 +236,10 @@ peer_with(struct keydb_t *db, char *srv) {
     struct pgp_key_t *key = NULL;
     int i, j, est_diff, ibf_min_size, acc;
     int count, ret;
+    uint64_t start_time, strata_time, ibf_time, done_time;
     fp160 hash;
+
+    start_time = us_timestamp();
 
     /* For efficient synchronization, try small strata estimators first. */
     for (i=0; i<STRATA_MAX_COUNT; i++) {
@@ -232,6 +265,7 @@ peer_with(struct keydb_t *db, char *srv) {
         break;
     }
     if (est_diff == -1) goto error;
+    strata_time = us_timestamp();
 
     printf("Estimated difference is %d keys, looking for ibf >= %d = %d.\n", est_diff, ibf_min_size, acc);
     filter = download_inv_bloom(srv, BLOOM_HASH, acc);
@@ -241,6 +275,7 @@ peer_with(struct keydb_t *db, char *srv) {
     count = 0;
     if (retry_rdlock(db)) goto error;
     if (!ibf_subtract(filter, db->filters[j])) {
+        ibf_time = us_timestamp();
         unlock(db);
         printf("Estimated difference from ibf=%ld.\n", ibf_count(filter));
         while ((ret = ibf_decode(filter, hash))) {
@@ -251,7 +286,7 @@ peer_with(struct keydb_t *db, char *srv) {
                 goto error;
             if (parse_key_metadata(key))
                 continue;
-            insert_key(db, key);
+            insert_key(db, key, 1);
             count++;
         }
         printf("Added %d keys.\n", count);
@@ -263,6 +298,12 @@ peer_with(struct keydb_t *db, char *srv) {
         unlock(db);
         goto error;
     }
+
+    done_time = us_timestamp();
+    printf("%ld us to download and decode Strata.\n", strata_time-start_time);
+    printf("%ld us to download and subtract Bloom.\n", ibf_time - strata_time);
+    printf("%ld us to download all keys.\n", done_time - ibf_time);
+    printf("%ld us total.\n", done_time - start_time);
 
     ibf_free(filter);
     strata_free(strata);
@@ -367,14 +408,15 @@ close_key_db(struct keydb_t *db) {
         ibf_free(db->filters[i]);
     for(i=0; i<STRATA_MAX_COUNT && db->strata[i]; i++)
         strata_free(db->strata[i]);
-    if (db->dbp->close(db->dbp, 0))
-        ret = -1;
+    if (db->dbp)
+        if (db->dbp->close(db->dbp, 0))
+            ret = -1;
     free(db);
     return ret;
 }
 
 int
-insert_key(struct keydb_t *db, struct pgp_key_t *pgp_key) {
+insert_key(struct keydb_t *db, struct pgp_key_t *pgp_key, int index) {
     DBT key, data;
     int ret;
 
@@ -390,6 +432,7 @@ insert_key(struct keydb_t *db, struct pgp_key_t *pgp_key) {
     data.size = pgp_key->len;
 
     if (retry_wrlock(db)) return -1;
+
     ret = db->dbp->put(db->dbp, NULL, &key, &data, DB_NOOVERWRITE);
 
     if (ret == DB_KEYEXIST)
@@ -397,9 +440,11 @@ insert_key(struct keydb_t *db, struct pgp_key_t *pgp_key) {
     else if (ret)
         goto err_lock;
 
-    if (add_key_to_index(db, pgp_key->version, pgp_key->len, pgp_key->user_id,
-                pgp_key->hash, pgp_key->fp, pgp_key->id32, pgp_key->id64))
-        goto err_lock;
+    if (index)
+        if (add_key_to_index(db, pgp_key->version, pgp_key->len, 
+                    pgp_key->user_id, pgp_key->hash, pgp_key->fp, 
+                    pgp_key->id32, pgp_key->id64))
+            goto err_lock;
 
 success_lock:
     unlock(db);
@@ -420,6 +465,9 @@ retrieve_key(struct keydb_t *db, struct pgp_key_t *pgp_key, fp160 hash) {
 
     memset(&key, 0, sizeof(key));
     memset(&data, 0, sizeof(data));
+    memset(pgp_key, 0, sizeof(*pgp_key));
+
+    data.flags = DB_DBT_MALLOC;
 
     key.data = hash;
     key.size = 20;
@@ -427,16 +475,20 @@ retrieve_key(struct keydb_t *db, struct pgp_key_t *pgp_key, fp160 hash) {
     ret = db->dbp->get(db->dbp, NULL, &key, &data, 0);
 
     if (ret)
-        return -1;
+        goto error;
 
-    if (!(pgp_key->data = malloc(data.size))) return -1;
+    if (!(pgp_key->data = malloc(data.size))) goto error;
 
     memcpy(pgp_key->data, data.data, data.size);
     pgp_key->len = data.size;
 
     if (parse_key_metadata(pgp_key))
-        return -1;
+        goto error;
 
     return 0;
+
+error:
+    free(data.data);
+    return -1;
 }
 
