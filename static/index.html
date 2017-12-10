@@ -1,0 +1,30 @@
+<html>
+    <head> 
+        <title>AKS Home Page</title> </head>
+    <body>
+        <h1> Welcome to Alex's Key Server </h1>
+        <form action="/pks/lookup" method="get">
+            <div>
+                <label for="search">Query:</label>
+                <input type="text" id="search" name="search">
+            </div>
+            <div>
+                <input type="radio" name="op" value="index">
+            </div>
+            <div class="button">
+                <button type="submit">Search!</button>
+            </div>
+        </form>
+        <form action="/pks/add" method="post" enctype="application/x-www-urlencoded">
+            <div>
+                <label for="key">Key:</label>
+                <textarea id="key" name="keytext">
+                    Paste ASCII-armored key here.
+                </textarea>
+            </div>
+            <div class="button">
+                <button type="submit">Upload!</button>
+            </div>
+    </body>
+</html>
+
