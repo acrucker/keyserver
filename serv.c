@@ -464,14 +464,14 @@ download_url(char *url) {
     if (ulfius_init_request(&req) != U_OK) return NULL;
     if (ulfius_init_response(&resp) != U_OK) goto error_req;
 
-    printf("Requesting URL %s\n", url);
+    /*printf("Requesting URL %s\n", url);*/
 
     req.http_protocol = strdup("1.0");
     req.http_verb = strdup("GET");
     req.http_url = strdup(url);
     if (U_OK != ulfius_send_http_request(&req, &resp)) goto error_resp;
 
-    printf("Request completed with status %ld, size %ld\n", resp.status, resp.binary_body_length);
+    /*printf("Request completed with status %ld, size %ld\n", resp.status, resp.binary_body_length);*/
 
     if (resp.status < 200 || resp.status >= 300)
         goto error_resp;
@@ -505,7 +505,7 @@ download_key(char *srv, fp160 hash) {
     if (!ret) goto error;
 
     print_fp160(hash, hash_buf);
-    printf("Attempting to get key %s from %s.\n", hash_buf, srv);
+    /*printf("Attempting to get key %s from %s.\n", hash_buf, srv);*/
     snprintf(url_buf, 1024, "%s/pks/lookup?op=download&search=%s", 
             srv, hash_buf);
 
@@ -535,6 +535,7 @@ download_strata(char *host, int k, int N, int c) {
 
     string = download_url(full_url);
     if (!string) return NULL;
+    printf("Strata is %ld bytes.\n", strlen(string));
 
     estimator = strata_from_string(string);
     if (!estimator) goto error_string;
@@ -564,6 +565,7 @@ download_inv_bloom(char *host, int k, int N) {
 
     string = download_url(full_url);
     if (!string) return NULL;
+    printf("IBF is %ld bytes.\n", strlen(string));
 
     filt = ibf_from_string(string);
     if (!filt) goto error_string;

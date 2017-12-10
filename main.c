@@ -117,6 +117,7 @@ int main(int argc, char **argv) {
         while (pause()) {
             if (done) break;
             if (do_poll) {
+                alarm(alarm_int);
                 do_poll = 0;
                 for (i=0; i<MAX_PEERS; i++) {
                     if (!peers[i].interval)

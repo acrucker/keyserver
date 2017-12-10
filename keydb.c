@@ -234,10 +234,11 @@ peer_with(struct keydb_t *db, char *srv) {
     struct pgp_key_t *key = NULL;
     int i, j, est_diff, ibf_min_size, acc;
     int count, ret;
-    uint64_t start_time, strata_time, ibf_time, done_time;
+    uint64_t start_time, strata_time, ibf_time, done_time, key_bytes;
     fp160 hash;
 
     start_time = us_timestamp();
+    key_bytes = 0;
 
     /* For efficient synchronization, try small strata estimators first. */
     for (i=0; i<STRATA_MAX_COUNT; i++) {
@@ -265,43 +266,49 @@ peer_with(struct keydb_t *db, char *srv) {
     if (est_diff == -1) goto error;
     strata_time = us_timestamp();
 
-    printf("Estimated difference is %d keys, looking for ibf >= %d = %d.\n", est_diff, ibf_min_size, acc);
-    filter = download_inv_bloom(srv, BLOOM_HASH, acc);
-    if (!filter) goto error;
+    if (est_diff) {
+        printf("Estimated difference is %d keys, looking for ibf >= %d = %d.\n", est_diff, ibf_min_size, acc);
+        filter = download_inv_bloom(srv, BLOOM_HASH, acc);
+        if (!filter) goto error;
 
-    printf("Downloaded filter.\n");
-    count = 0;
-    if (retry_rdlock(db)) goto error;
-    if (!ibf_subtract(filter, db->filters[j])) {
-        ibf_time = us_timestamp();
-        unlock(db);
-        printf("Estimated difference from ibf=%ld.\n", ibf_count(filter));
-        while ((ret = ibf_decode(filter, hash))) {
-            if (ret < 0)
-                continue;
-            key = download_key(srv, hash);
-            if (!key)
+        printf("Downloaded filter.\n");
+        count = 0;
+        if (retry_rdlock(db)) goto error;
+        if (!ibf_subtract(filter, db->filters[j])) {
+            ibf_time = us_timestamp();
+            unlock(db);
+            printf("Estimated difference from ibf=%ld.\n", ibf_count(filter));
+            while ((ret = ibf_decode(filter, hash))) {
+                if (ret < 0)
+                    continue;
+                key = download_key(srv, hash);
+                if (!key)
+                    goto error;
+                key_bytes += key->len;
+                if (parse_key_metadata(key))
+                    continue;
+                insert_key(db, key, 1);
+                count++;
+            }
+            printf("Added %d keys.\n", count);
+            if (ibf_count(filter)) {
+                printf("Undecodeable keys.\n");
                 goto error;
-            if (parse_key_metadata(key))
-                continue;
-            insert_key(db, key, 1);
-            count++;
-        }
-        printf("Added %d keys.\n", count);
-        if (ibf_count(filter)) {
-            printf("Undecodeable keys.\n");
+            }
+        } else {
+            unlock(db);
             goto error;
         }
-    } else {
-        unlock(db);
-        goto error;
     }
 
     done_time = us_timestamp();
     printf("%ld us to download and decode Strata.\n", strata_time-start_time);
-    printf("%ld us to download and subtract Bloom.\n", ibf_time - strata_time);
-    printf("%ld us to download all keys.\n", done_time - ibf_time);
+    if (est_diff) {
+        printf("%ld us to download and subtract Bloom.\n", ibf_time - strata_time);
+        printf("%ld us to download all keys.\n", done_time - ibf_time);
+    }
     printf("%ld us total.\n", done_time - start_time);
+    printf("%ld total key bytes.\n", key_bytes);
 
     ibf_free(filter);
     strata_free(strata);
