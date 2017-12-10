@@ -106,34 +106,33 @@ int main(int argc, char **argv) {
                 return -1;
             }
         }
-    } else {
-        signal(SIGINT, &handle_sig);
-        signal(SIGTERM, &handle_sig);
-        signal(SIGALRM, &handle_sig);
-        alarm(alarm_int);
-        printf("Starting in server mode on port %d.\n", port);
-        if (!(serv=start_server(port, serv_root, db)) )
-            goto error_serv;
-        while (pause()) {
-            if (done) break;
-            if (do_poll) {
-                alarm(alarm_int);
-                do_poll = 0;
-                for (i=0; i<MAX_PEERS; i++) {
-                    if (!peers[i].interval)
-                        break;
-                    peers[i].countdown -= alarm_int;
-                    if (peers[i].countdown <= 0) {
-                        printf("Polling %s.\n", peers[i].host);
-                        peers[i].countdown = peers[i].interval;
-                        peers[i].status = peer_with(db, peers[i].host);
-                    }
+    } 
+    signal(SIGINT, &handle_sig);
+    signal(SIGTERM, &handle_sig);
+    signal(SIGALRM, &handle_sig);
+    alarm(alarm_int);
+    printf("Starting in server mode on port %d.\n", port);
+    if (!(serv=start_server(port, serv_root, db)) )
+        goto error_serv;
+    while (pause()) {
+        if (done) break;
+        if (do_poll) {
+            alarm(alarm_int);
+            do_poll = 0;
+            for (i=0; i<MAX_PEERS; i++) {
+                if (!peers[i].interval)
+                    break;
+                peers[i].countdown -= alarm_int;
+                if (peers[i].countdown <= 0) {
+                    printf("Polling %s.\n", peers[i].host);
+                    peers[i].countdown = peers[i].interval;
+                    peers[i].status = peer_with(db, peers[i].host);
                 }
             }
         }
-        printf("Received signal, terminating.\n");
-        stop_server(serv);
     }
+    printf("Received signal, terminating.\n");
+    stop_server(serv);
 error_serv:
     printf("Closing database.\n");
     if (close_key_db(db)) {

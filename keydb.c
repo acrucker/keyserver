@@ -200,7 +200,7 @@ ingest_file(struct keydb_t *db, const char *filename, float excl_pct) {
             continue;
         }
         /*if(insert_key(db, &key, 0, db->gtxnid)) {*/
-        if(insert_key(db, &key, 0)) {
+        if(insert_key(db, &key, 1)) {
             printf("Failed to insert key.\n");
             return -1; 
         }
