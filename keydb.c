@@ -97,12 +97,10 @@ add_key_to_index(struct keydb_t *db, int version, int size, char *uid,
     memcpy(db->key_idx[i].hash, hash, sizeof(fp160));
     memcpy(db->key_idx[i].fp, fp, sizeof(fp160));
 
-#if 0
     for (i=0; i<BLOOM_MAX_COUNT && db->filters[i]; i++)
         ibf_insert(db->filters[i], hash);
     for (i=0; i<STRATA_MAX_COUNT && db->strata[i]; i++)
         strata_insert(db->strata[i], hash);
-#endif
 
     return 0;
 }
