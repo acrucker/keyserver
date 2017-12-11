@@ -8,9 +8,9 @@
 #define IBF_MIN_SIZE 10
 
 #define STRATA_IBF_SIZE 40
-#define STRATA_IBF_MIN_DEPTH 4
+#define STRATA_IBF_MIN_DEPTH 1
 
-#define STRATA_MAX_COUNT 4
+#define STRATA_MAX_COUNT 5
 #define BLOOM_MAX_COUNT 16
 
 struct inv_bloom_t;

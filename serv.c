@@ -143,6 +143,7 @@ pretty_print_index_html(struct pgp_key_t *results, int num_results, const char *
     char *buf;
     char uid_escape_buf[1024];
     int buf_len, printed, i, j, epos;
+    char hash_printed[41];
 
     printed = 0;
     buf_len = 4096*num_results+8192;
@@ -158,9 +159,10 @@ pretty_print_index_html(struct pgp_key_t *results, int num_results, const char *
 
     for (i=0; i<num_results; i++) {
         j=epos=0;
+        print_fp160(results[i].hash, hash_printed);
         html_escape_string_UTF8(uid_escape_buf, 1024, results[i].user_id);
         printed += snprintf(buf+printed, buf_len-printed,
-"<p>FP=%08X UID=\"%s\"</p>\r\n", results[i].id32, uid_escape_buf);
+"<p>FP=<a href=\"/pks/lookup?op=download&search=%s\">%08X</a> UID=\"%s\"</p>\r\n", hash_printed, results[i].id32, uid_escape_buf);
         if (printed > buf_len) goto error;
     }
     printed += snprintf(buf+printed, buf_len-printed, "</body>");
@@ -236,7 +238,11 @@ int callback_hkp_lookup(const struct _u_request *request,
         num_results = query_key_db(db, search, MAX_RESULTS, results, exact, after);
 
     if (index) {
-        resp = pretty_print_index_html(results, num_results, search, exact, after);
+        if (!mr)  {
+            resp = pretty_print_index_html(results, num_results, search, exact, after);
+        } else {
+            return reply_response_status(response, 501, "mr not supporte");
+        }
     } else if (vindex) {
         return reply_response_status(response, 501, "vindex not supported");
     } else if (download) {

@@ -90,7 +90,7 @@ int main(int argc, char **argv) {
     }
 
 
-    db = open_key_db(db_name, create, ingest?0:1);
+    db = open_key_db(db_name, create);
     if (!db) {
         if (create)
             printf("Unable to open/create database %s\n", db_name);
@@ -110,10 +110,12 @@ int main(int argc, char **argv) {
     signal(SIGINT, &handle_sig);
     signal(SIGTERM, &handle_sig);
     signal(SIGALRM, &handle_sig);
-    alarm(alarm_int);
+    alarm(1);
     printf("Starting in server mode on port %d.\n", port);
-    if (!(serv=start_server(port, serv_root, db)) )
+    if (!(serv=start_server(port, serv_root, db)) ) {
+        printf("Error starting server.\n");
         goto error_serv;
+    }
     while (pause()) {
         if (done) break;
         if (do_poll) {

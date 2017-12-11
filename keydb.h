@@ -7,7 +7,7 @@
 #include "setdiff.h"
 
 struct keydb_t *
-open_key_db(const char *filename, char create, char index);
+open_key_db(const char *filename, char create);
 
 int
 query_key_db(struct keydb_t *db, const char *query, int max_results,

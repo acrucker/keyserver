@@ -15,6 +15,8 @@
 #include <errno.h>
 /*#include <valgrind/memcheck.h>*/
 
+#define MULTIPUT_SIZE (1024*1024*256)
+
 struct key_idx_t {
     int version;
     uint32_t id32;
@@ -106,7 +108,7 @@ add_key_to_index(struct keydb_t *db, int version, int size, char *uid,
 }
 
 struct keydb_t *
-open_key_db(const char *filename, char create, char index) {
+open_key_db(const char *filename, char create) {
     struct keydb_t *ret;
     DBC *curs;
     DBT key, data;
@@ -133,36 +135,37 @@ open_key_db(const char *filename, char create, char index) {
 
     if (db_create(&ret->dbp, NULL, 0)) goto error;
 
+    ret->dbp->set_h_ffactor(ret->dbp, 1);
+    ret->dbp->set_h_nelem(ret->dbp, 8000000);
+
     if (ret->dbp->open(ret->dbp, NULL, filename, NULL, DB_HASH, flags, 0666))
         goto error;
 
     if (pthread_rwlock_init(&ret->lock, 0)) goto error;
 
-    if (index) {
-        if (ret->dbp->cursor(ret->dbp, NULL, &curs, 0)) goto error;
-    
-        indexed = 0;
-        while (!curs->c_get(curs, &key, &data, DB_NEXT)) {
-            pgp_key.data = data.data;
-            pgp_key.len = data.size;
+    if (ret->dbp->cursor(ret->dbp, NULL, &curs, 0)) goto error;
 
-            if (parse_key_metadata(&pgp_key))
-                continue;
+    indexed = 0;
+    while (!curs->c_get(curs, &key, &data, DB_NEXT)) {
+        pgp_key.data = data.data;
+        pgp_key.len = data.size;
 
-            if (add_key_to_index(ret, pgp_key.version, pgp_key.len,
-                        pgp_key.user_id, pgp_key.hash, pgp_key.fp, pgp_key.id32, pgp_key.id64))
-                goto error;
+        if (parse_key_metadata(&pgp_key))
+            continue;
 
-            free(pgp_key.user_id);
-            if (++indexed%10000 == 0)
-                printf("Indexing...%d\n", indexed);
+        if (add_key_to_index(ret, pgp_key.version, pgp_key.len,
+                    pgp_key.user_id, pgp_key.hash, pgp_key.fp, pgp_key.id32, pgp_key.id64))
+            goto error;
 
-        }
-        curs->c_close(curs);
+        free(pgp_key.user_id);
+        if (++indexed%10000 == 0)
+            printf("Indexing...%d\n", indexed);
 
-        printf("Index contains %d keys.\n", ret->idx_count);
-        free(data.data);
     }
+    curs->c_close(curs);
+
+    printf("Index contains %d keys.\n", ret->idx_count);
+    free(data.data);
 
     return ret;
 
@@ -179,6 +182,10 @@ ingest_file(struct keydb_t *db, const char *filename, float excl_pct) {
     FILE *in;
     struct pgp_key_t key;
     int read, total;
+    DBT data;
+    void *ptr;
+
+    memset(&data, 0, sizeof(data));
 
     read = total = 0;
 
@@ -190,6 +197,12 @@ ingest_file(struct keydb_t *db, const char *filename, float excl_pct) {
         fprintf(stderr, "Could not open dump file %s\n", filename);
         return -1;
     }
+
+    data.ulen = MULTIPUT_SIZE;
+    data.data = malloc(MULTIPUT_SIZE);
+    if (!data.data)
+        goto error_free_DBT;
+    DB_MULTIPLE_WRITE_INIT(ptr, &data);
     
     key.user_id = NULL;
     while (!parse_from_dump(in, &key)) {
@@ -200,10 +213,19 @@ ingest_file(struct keydb_t *db, const char *filename, float excl_pct) {
             continue;
         }
         /*if(insert_key(db, &key, 0, db->gtxnid)) {*/
-        if(insert_key(db, &key, 1)) {
+        DB_MULTIPLE_KEY_WRITE_NEXT(ptr, &data, key.hash, 20, key.data, key.len);
+        if (!ptr)
+            goto error_free_DBT;
+
+        if (add_key_to_index(db, key.version, key.len, 
+                    key.user_id, key.hash, key.fp, 
+                    key.id32, key.id64))
+            goto error_free_DBT;
+
+        /*if(insert_key(db, &key, 1)) {
             printf("Failed to insert key.\n");
             return -1; 
-        }
+        }*/
 
         total += key.len;
         free(key.data);
@@ -214,9 +236,17 @@ ingest_file(struct keydb_t *db, const char *filename, float excl_pct) {
             printf("Ingesting...%d\n", read);
     }
 
+    if (db->dbp->put(db->dbp, NULL, &data, NULL, DB_MULTIPLE_KEY)) {
+        printf("Error with multiput.\n");
+        goto error_free_DBT;
+    }
+
     fclose(in);
     printf("Read %d keys (total %6.2f MiB) from %s\n", read, total/1024.0/1024.0, filename);
     return 0;
+error_free_DBT:
+    free(data.data);
+    return -1;
 }
 
 
@@ -445,13 +475,13 @@ insert_key(struct keydb_t *db, struct pgp_key_t *pgp_key, int index) {
     else if (ret)
         goto err_lock;
 
+success_lock:
     if (index)
         if (add_key_to_index(db, pgp_key->version, pgp_key->len, 
                     pgp_key->user_id, pgp_key->hash, pgp_key->fp, 
                     pgp_key->id32, pgp_key->id64))
             goto err_lock;
 
-success_lock:
     unlock(db);
     return 0;
 err_lock:
