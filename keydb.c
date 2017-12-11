@@ -113,6 +113,9 @@ open_key_db(const char *filename, char create) {
     DBC *curs;
     DBT key, data;
     struct pgp_key_t pgp_key;
+    uint8_t *retdata, *retkey;
+    void *ptr;
+    size_t retklen, retdlen;
     int flags, i;
     int indexed;
 
@@ -122,8 +125,6 @@ open_key_db(const char *filename, char create) {
     memset(ret, 0, sizeof(struct keydb_t));
     memset(&key, 0, sizeof(key));
     memset(&data, 0, sizeof(data));
-
-    data.flags = DB_DBT_REALLOC;
 
     for (i=0; i<BLOOM_MAX_COUNT; i++)
         assert(ret->filters[i]=ibf_allocate(BLOOM_HASH, (10<<i)));
@@ -143,24 +144,36 @@ open_key_db(const char *filename, char create) {
 
     if (pthread_rwlock_init(&ret->lock, 0)) goto error;
 
-    if (ret->dbp->cursor(ret->dbp, NULL, &curs, 0)) goto error;
+    if (ret->dbp->cursor(ret->dbp, NULL, &curs, DB_CURSOR_BULK)) goto error;
 
     indexed = 0;
-    while (!curs->c_get(curs, &key, &data, DB_NEXT)) {
-        pgp_key.data = data.data;
-        pgp_key.len = data.size;
 
-        if (parse_key_metadata(&pgp_key))
-            continue;
+    data.data = malloc(MULTIPUT_SIZE);
+    if (!data.data)
+        goto error;
+    data.ulen = MULTIPUT_SIZE;
+    data.flags = DB_DBT_USERMEM;
 
-        if (add_key_to_index(ret, pgp_key.version, pgp_key.len,
-                    pgp_key.user_id, pgp_key.hash, pgp_key.fp, pgp_key.id32, pgp_key.id64))
-            goto error;
+    while (!curs->c_get(curs, &key, &data, DB_MULTIPLE_KEY | DB_NEXT)) {
+        DB_MULTIPLE_INIT(ptr, &data);
+        while (1) {
+            DB_MULTIPLE_KEY_NEXT(ptr, &data, retkey, retklen, retdata, retdlen);
+            if (!ptr)
+                break;
+            pgp_key.data = retdata;
+            pgp_key.len = retdlen;
 
-        free(pgp_key.user_id);
-        if (++indexed%10000 == 0)
-            printf("Indexing...%d\n", indexed);
+            if (parse_key_metadata(&pgp_key))
+                continue;
 
+            if (add_key_to_index(ret, pgp_key.version, pgp_key.len,
+                        pgp_key.user_id, pgp_key.hash, pgp_key.fp, pgp_key.id32, pgp_key.id64))
+                goto error;
+
+            free(pgp_key.user_id);
+            if (++indexed%10000 == 0)
+                printf("Indexing...%d\n", indexed);
+        }
     }
     curs->c_close(curs);
 
