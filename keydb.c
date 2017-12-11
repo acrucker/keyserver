@@ -135,8 +135,8 @@ open_key_db(const char *filename, char create) {
 
     if (db_create(&ret->dbp, NULL, 0)) goto error;
 
-    ret->dbp->set_h_ffactor(ret->dbp, 1);
-    ret->dbp->set_h_nelem(ret->dbp, 8000000);
+    //ret->dbp->set_h_ffactor(ret->dbp, 1);
+    //ret->dbp->set_h_nelem(ret->dbp, 8000000);
 
     if (ret->dbp->open(ret->dbp, NULL, filename, NULL, DB_HASH, flags, 0666))
         goto error;
@@ -236,7 +236,7 @@ ingest_file(struct keydb_t *db, const char *filename, float excl_pct) {
             printf("Ingesting...%d\n", read);
     }
 
-    if (db->dbp->put(db->dbp, NULL, &data, NULL, DB_MULTIPLE_KEY)) {
+    if (db->dbp->put(db->dbp, NULL, &data, NULL, DB_MULTIPLE_KEY | DB_OVERWRITE_DUP)) {
         printf("Error with multiput.\n");
         goto error_free_DBT;
     }

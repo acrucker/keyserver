@@ -18,7 +18,7 @@ struct strata_estimator_t *
 download_strata(char *host, int k, int N, int c);
 
 struct serv_state_t *
-start_server(short port, char *root, struct keydb_t *db);
+start_server(short port, char *root, struct keydb_t *db, struct status_t *stat);
 
 void
 stop_server(struct serv_state_t *serv);

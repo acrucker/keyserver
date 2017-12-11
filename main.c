@@ -12,17 +12,8 @@
 #include "keydb.h"
 #include "serv.h"
 
-#define MAX_PEERS 256
-
 char done = 0;
 char do_poll = 1;
-
-struct peer_t {
-    char host[1024];
-    int interval;
-    int countdown;
-    int status;
-};
 
 void
 handle_sig(int sig) {
@@ -40,6 +31,7 @@ int main(int argc, char **argv) {
     char *serv_root = "static";
 
     struct peer_t peers[MAX_PEERS];
+    struct status_t status;
     char verbose, create, ingest;
     struct keydb_t *db;
     struct serv_state_t *serv;
@@ -66,6 +58,10 @@ int main(int argc, char **argv) {
             case 'v': verbose = 1;              break;
         }
     }
+
+    status.port = port;
+    status.alarm_int = alarm_int;
+    status.peers = peers;
 
     hosts_in = fopen(hosts_file, "r");
     if (!hosts_in) {
@@ -107,12 +103,13 @@ int main(int argc, char **argv) {
             }
         }
     } 
+    status.nkeys = ibf_count(get_bloom(db, 0));
     signal(SIGINT, &handle_sig);
     signal(SIGTERM, &handle_sig);
     signal(SIGALRM, &handle_sig);
     alarm(1);
     printf("Starting in server mode on port %d.\n", port);
-    if (!(serv=start_server(port, serv_root, db)) ) {
+    if (!(serv=start_server(port, serv_root, db, &status)) ) {
         printf("Error starting server.\n");
         goto error_serv;
     }
@@ -131,6 +128,7 @@ int main(int argc, char **argv) {
                     peers[i].status = peer_with(db, peers[i].host);
                 }
             }
+            status.nkeys = ibf_count(get_bloom(db, 0));
         }
     }
     printf("Received signal, terminating.\n");

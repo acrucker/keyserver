@@ -458,6 +458,43 @@ int callback_add_key(const struct _u_request *request,
 
 }
 
+int callback_status(const struct _u_request *request,
+                    struct _u_response *response,
+                    void *stat_) {
+    struct status_t *stat = stat_;
+    char status_buf[BUF_SIZE];
+    int w = 0;
+    int i = 0;
+
+    w += snprintf(status_buf+w, BUF_SIZE-w,
+"<html> <head> <title>AKS Status Page</title> </head> <body>"
+        "<h1> Keyserver Status: </h1><ul>");
+    w += snprintf(status_buf+w, BUF_SIZE-w,
+            "<li>Running on port: %d</li>", stat->port);
+    w += snprintf(status_buf+w, BUF_SIZE-w,
+            "<li>Alarm interval: %d</li>", stat->alarm_int);
+    w += snprintf(status_buf+w, BUF_SIZE-w,
+            "<li>Key count: %d</li>", stat->nkeys);
+    w += snprintf(status_buf+w, BUF_SIZE-w, "</ul>");
+    w += snprintf(status_buf+w, BUF_SIZE-w, "<h1> Keyserver Peers: </h1><ul>"); 
+
+    for (i=0; i<MAX_PEERS; i++) {
+        if (!stat->peers[i].interval)
+            break;
+        w += snprintf(status_buf+w, BUF_SIZE-w,
+                "<li>%s: Int=%d Status=%s</li>", stat->peers[i].host,
+                                                 stat->peers[i].interval,
+                                                 stat->peers[i].status?"DOWN":"UP");
+    }
+
+    w += snprintf(status_buf+w, BUF_SIZE-w, "</ul>");
+    w += snprintf(status_buf+w, BUF_SIZE-w, "</body> </html>");
+    
+    printf("Received request for status page.\n");
+    ulfius_set_string_body_response(response, 200, status_buf);
+    return U_CALLBACK_COMPLETE;
+
+}
 
 char *
 download_url(char *url) {
@@ -590,7 +627,7 @@ error_string:
 }
 
 struct serv_state_t *
-start_server(short port, char *root, struct keydb_t *db) {
+start_server(short port, char *root, struct keydb_t *db, struct status_t *stat) {
     struct serv_state_t *serv;
 
     if (!(serv=malloc(sizeof(struct serv_state_t))))
@@ -618,6 +655,8 @@ start_server(short port, char *root, struct keydb_t *db) {
     ulfius_add_endpoint_by_val(&serv->inst, "GET", NULL, 
             "/ibf/:hcnt/:size", 0, &callback_bloom, db);
     /* Add the system status endpoint. */
+    ulfius_add_endpoint_by_val(&serv->inst, "GET", NULL, 
+            "/status", 0, &callback_status, stat);
 
     /* Start the server. */
     if (U_OK != ulfius_start_framework(&serv->inst))

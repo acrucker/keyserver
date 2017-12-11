@@ -13,6 +13,8 @@
 #define STRATA_MAX_COUNT 5
 #define BLOOM_MAX_COUNT 16
 
+#define MAX_PEERS 256
+
 struct inv_bloom_t;
 struct keydb_t;
 typedef uint8_t fp160[20];
@@ -28,5 +30,20 @@ struct pgp_key_t {
     fp160 fp;
     fp160 hash;
 };
+
+struct peer_t {
+    char host[1024];
+    int interval;
+    int countdown;
+    int status;
+};
+
+struct status_t {
+    int port;
+    int alarm_int;
+    int nkeys;
+    struct peer_t *peers;
+};
+
 
 #endif
