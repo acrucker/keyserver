@@ -11,7 +11,7 @@
 #define STRATA_IBF_MIN_DEPTH 1
 
 #define STRATA_MAX_COUNT 5
-#define BLOOM_MAX_COUNT 16
+#define BLOOM_MAX_COUNT 10
 
 #define MAX_PEERS 256
 
