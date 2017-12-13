@@ -15,7 +15,7 @@
 #include <errno.h>
 /*#include <valgrind/memcheck.h>*/
 
-#define MULTIPUT_SIZE (1024*1024*256)
+#define MULTIPUT_SIZE (1024*1024*64)
 
 struct key_idx_t {
     int version;
@@ -213,9 +213,15 @@ ingest_file(struct keydb_t *db, const char *filename, float excl_pct) {
 
     data.ulen = MULTIPUT_SIZE;
     data.data = malloc(MULTIPUT_SIZE);
-    if (!data.data)
+    if (!data.data) {
+        printf("Error allocating memory.\n");
         goto error_free_DBT;
+    }
     DB_MULTIPLE_WRITE_INIT(ptr, &data);
+    if (!ptr) {
+        printf("Error initializing buffer.\n");
+        goto error_free_DBT;
+    }
     
     key.user_id = NULL;
     while (!parse_from_dump(in, &key)) {
@@ -227,13 +233,17 @@ ingest_file(struct keydb_t *db, const char *filename, float excl_pct) {
         }
         /*if(insert_key(db, &key, 0, db->gtxnid)) {*/
         DB_MULTIPLE_KEY_WRITE_NEXT(ptr, &data, key.hash, 20, key.data, key.len);
-        if (!ptr)
+        if (!ptr) {
+            printf("Error writing data.\n");
             goto error_free_DBT;
+        }
 
         if (add_key_to_index(db, key.version, key.len, 
                     key.user_id, key.hash, key.fp, 
-                    key.id32, key.id64))
+                    key.id32, key.id64)) {
+            printf("Error writing key to index.\n");
             goto error_free_DBT;
+        }
 
         /*if(insert_key(db, &key, 1)) {
             printf("Failed to insert key.\n");
@@ -253,6 +263,7 @@ ingest_file(struct keydb_t *db, const char *filename, float excl_pct) {
         printf("Error with multiput.\n");
         goto error_free_DBT;
     }
+    free(data.data);
 
     fclose(in);
     printf("Read %d keys (total %6.2f MiB) from %s\n", read, total/1024.0/1024.0, filename);
@@ -431,8 +442,8 @@ query_key_db(struct keydb_t *db, const char *query, int max_results,
         /* Get the key into the next slot from BDB. */
         if (retrieve_key(db, &keys[res_idx], db->key_idx[i].hash))
             break;
-        if (parse_key_metadata(&keys[res_idx]))
-            break;
+        /*if (parse_key_metadata(&keys[res_idx]))
+            break;*/
         /* Limit the total number of keys. */
         if (++res_idx >= max_results)
             break;
@@ -525,9 +536,10 @@ retrieve_key(struct keydb_t *db, struct pgp_key_t *pgp_key, fp160 hash) {
     if (ret)
         goto error;
 
-    if (!(pgp_key->data = malloc(data.size))) goto error;
+    /*if (!(pgp_key->data = malloc(data.size))) goto error;*/
 
-    memcpy(pgp_key->data, data.data, data.size);
+    /*memcpy(pgp_key->data, data.data, data.size);*/
+    pgp_key->data = data.data;
     pgp_key->len = data.size;
 
     if (parse_key_metadata(pgp_key))

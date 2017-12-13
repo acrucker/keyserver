@@ -13,7 +13,7 @@
 #include "util.h"
 
 #define PATH_LEN 256
-#define BUF_SIZE (1024*1024)
+#define BUF_SIZE (16*1024)
 #define MAX_RESULTS 1000
 
 struct serv_state_t {
@@ -139,7 +139,7 @@ html_escape_string_UTF8(char *out_buf, size_t out_size, char *in_buf) {
 }
 
 char *
-pretty_print_index_html(struct pgp_key_t *results, int num_results, const char *query, char exact, int after) {
+pretty_print_index_html(const struct pgp_key_t *results, int num_results, const char *query, char exact, int after) {
     char *buf;
     char uid_escape_buf[1024];
     int buf_len, printed, i, j, epos;
@@ -241,9 +241,17 @@ int callback_hkp_lookup(const struct _u_request *request,
         if (!mr)  {
             resp = pretty_print_index_html(results, num_results, search, exact, after);
         } else {
+            for (i=0; i<num_results; i++) {
+                free(results[i].data);
+                free(results[i].user_id);
+            }
             return reply_response_status(response, 501, "mr not supporte");
         }
     } else if (vindex) {
+        for (i=0; i<num_results; i++) {
+            free(results[i].data);
+            free(results[i].user_id);
+        }
         return reply_response_status(response, 501, "vindex not supported");
     } else if (download) {
         parse_fp160(search, hash);
@@ -384,9 +392,6 @@ int callback_static(const struct _u_request *request,
     char buf[BUF_SIZE];
 
     printf("Request for static page %s\n", request->http_url);
-    if (!(fd=malloc(sizeof(int))))
-        return reply_response_status(response, 500, "malloc");
-
     if (strstr(request->http_url, ".."))
         return reply_response_status(response, 403, "Path can't contain ..");
 
@@ -400,13 +405,20 @@ int callback_static(const struct _u_request *request,
             return reply_response_status(response, 500, buf);
     }
 
-    if (-1 == (*fd=open(buf, 0)))
+    if (!(fd=malloc(sizeof(int))))
+        return reply_response_status(response, 500, "malloc");
+
+    if (-1 == (*fd=open(buf, 0))) {
+        free(fd);
         return reply_response_status(response, 500, buf);
+    }
 
     if (U_OK != ulfius_set_stream_response(response, 200, 
                 &callback_static_stream, &free_static_stream, file_stat.st_size,
-                BUF_SIZE, fd))
-        return reply_response_status(response, 500, NULL);
+                BUF_SIZE, fd)) {
+        free(fd);
+        return reply_response_status(response, 500, "");
+    }
 
     return U_CALLBACK_COMPLETE;
 }
@@ -437,8 +449,11 @@ int callback_add_key(const struct _u_request *request,
         free(key.data);
         return reply_response_status(response, 400, "Malformed key");
     }
-    
-    if (retrieve_key(db, &test_key, key.hash)) {
+
+    print_fp160(key.hash, hash_buf);
+    printf("Attempting to add key with hash %s\n", hash_buf);
+
+    if (!retrieve_key(db, &test_key, key.hash)) {
         inner_free_key(&test_key);
         inner_free_key(&key);
         return reply_response_status(response, 403, "Cannot overwrite key.");

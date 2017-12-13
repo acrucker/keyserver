@@ -15,7 +15,7 @@ parse_fp160(const char *buf, fp160 out) {
 }
 
 void
-print_fp160(fp160 in, char *buf) {
+print_fp160(const fp160 in, char *buf) {
     int j;
     for(j=0; j<20; j++)
         sprintf(buf+2*j, "%02X", in[j]);

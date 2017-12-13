@@ -3,6 +3,7 @@
         <title>AKS Home Page</title> </head>
     <body>
         <h1> Welcome to Alex's Key Server </h1>
+        <a href="/status">Server Status</a>
         <form action="/pks/lookup" method="get">
             <div>
                 <label for="search">Query:</label>
@@ -19,9 +20,7 @@
         <form action="/pks/add" method="post" enctype="application/x-www-urlencoded">
             <div>
                 <label for="key">Key:</label>
-                <textarea id="key" name="keytext">
-                    Paste ASCII-armored key here.
-                </textarea>
+                <textarea id="key" name="keytext">Paste ASCII-armored key here.</textarea>
             </div>
             <div class="button">
                 <button type="submit">Upload!</button>

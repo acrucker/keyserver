@@ -72,12 +72,15 @@ int main(int argc, char **argv) {
     for (i=0; i<MAX_PEERS; i++) {
         if (2 != fscanf(hosts_in, "%d %1024[^ \r\n\t\v\f]", &peers[i].interval, peers[i].host)) {
             peers[i].interval = 0;
+            peers[i].countdown = 0;
+            peers[i].status = -1;
             break;
         } else if (peers[i].interval == 0) {
             /* Skip invalid interval. */
             i--;
         }
     }
+    fclose(hosts_in);
     printf("Read %d hosts from file:\n", i);
     for (i=0; i<MAX_PEERS; i++) {
         if (peers[i].interval == 0)

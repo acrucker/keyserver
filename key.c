@@ -406,6 +406,7 @@ ascii_armor_keys(struct pgp_key_t *key, int count) {
     ascii_armor_24b(tmp, enc);
     printed += sprintf(buf+printed, "\n=%s", enc);
     printed += sprintf(buf+printed, "\n" END_ASCII);
+    free(data);
     return buf;
 error:
     if (buf)
